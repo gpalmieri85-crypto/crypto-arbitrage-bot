@@ -31,20 +31,15 @@ const CONFIG = {
   reconnectDelay: 5000,
   statusInterval: 30000,
 
-  // Visualizzazione mercato
   displayCooldown: 1000,
 
-  // Scanner continuo indipendente dal Live Tail
   marketScanInterval: 250,
 
-  // Ping OKX
   okxPingInterval: 20000,
 
-  // Watchdog dati mercato
   marketDataWatchdogInterval: 10000,
   marketDataTimeout: 15000,
 
-  // Self test PAPER
   selfTestEnabled: true
 };
 
@@ -199,6 +194,85 @@ function validNumber(value) {
     Number.isFinite(value) &&
     value > 0
   );
+}
+
+
+// ============================================================
+// TELEGRAM NOTIFICATIONS
+// ============================================================
+
+const TELEGRAM_CHAT_ID = "1254274653";
+
+
+async function sendTelegram(message) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+
+  if (!token) {
+    log(
+      "⚠️ Telegram: Secret TELEGRAM_BOT_TOKEN non trovato."
+    );
+
+    return false;
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          chat_id: TELEGRAM_CHAT_ID,
+          text: message,
+          disable_web_page_preview: true
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const body = await response.text();
+
+      log(
+        `❌ Telegram HTTP ${response.status}: ${body}`
+      );
+
+      return false;
+    }
+
+    log(
+      "📲 Telegram: notifica inviata."
+    );
+
+    return true;
+
+  } catch (error) {
+
+    log(
+      "❌ Telegram error: " +
+      error.message
+    );
+
+    return false;
+  }
+}
+
+
+function notifyTelegram(message) {
+
+  sendTelegram(message)
+    .catch(error => {
+
+      log(
+        "❌ Telegram promise error: " +
+        error.message
+      );
+
+    });
+
 }
 
 
@@ -611,7 +685,6 @@ function updateConfirmation(
   const currentTime =
     Date.now();
 
-
   if (
     !profitable
   ) {
@@ -973,6 +1046,21 @@ function executePaperTrade(
   );
 
   console.log("");
+
+
+  notifyTelegram(
+    `🚨 PAPER TRADE ESEGUITO\n\n` +
+    `Pair: ${symbol}\n` +
+    `BUY: ${buyExchange} @ ${buyPrice.toFixed(2)}\n` +
+    `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}\n` +
+    `Spread lordo: ${pct(grossPercent)}\n` +
+    `Profitto netto: ${pct(netPercent)}\n` +
+    `Capitale operazione: ${money(tradeAmount)}\n` +
+    `Profitto: ${money(profit)}\n` +
+    `Capitale dopo: ${money(paper.capital)}\n` +
+    `Operazioni totali: ${paper.trades}\n` +
+    `🔒 Ordini reali: DISABILITATI`
+  );
 }
 
 
@@ -1071,7 +1159,6 @@ function runPaperSelfTest() {
     ) {
 
       confirmations.BTC.cbToOkx++;
-
 
       console.log(
         `🧪 Conferma test CB -> OKX: ${confirmations.BTC.cbToOkx}/${CONFIG.requiredConfirmations}`
@@ -1431,9 +1518,7 @@ function updateCoinbase(data) {
           .timestamp =
           Date.now();
 
-
         stats.coinbaseUpdates++;
-
 
         checkArbitrage(
           symbol,
@@ -1519,7 +1604,6 @@ function connectCoinbase() {
 
         stats.coinbaseMessages++;
 
-
         connectionState.coinbase.lastMessage =
           Date.now();
 
@@ -1570,6 +1654,11 @@ function connectCoinbase() {
 
       log(
         "🔴 Coinbase disconnesso."
+      );
+
+
+      notifyTelegram(
+        "🔴 Coinbase DISCONNESSO\n\n🔄 Riconnessione automatica in corso..."
       );
 
 
@@ -1713,9 +1802,7 @@ function updateOKX(data) {
       .timestamp =
       Date.now();
 
-
     stats.okxUpdates++;
-
 
     checkArbitrage(
       symbol,
@@ -1820,7 +1907,6 @@ function connectOKX() {
       try {
 
         stats.okxMessages++;
-
 
         connectionState.okx.lastMessage =
           Date.now();
@@ -1938,6 +2024,11 @@ function connectOKX() {
 
       log(
         "🔴 OKX disconnesso."
+      );
+
+
+      notifyTelegram(
+        "🔴 OKX DISCONNESSO\n\n🔄 Riconnessione automatica in corso..."
       );
 
 
@@ -2166,6 +2257,14 @@ log(
 
 log(
   "🚀 CRYPTO ARBITRAGE PAPER ENGINE v11"
+);
+
+notifyTelegram(
+  `🟢 CRYPTO ARBITRAGE PAPER ENGINE AVVIATO\n\n` +
+  `Modalità: PAPER TRADING\n` +
+  `Capitale iniziale: ${money(CONFIG.initialCapital)}\n` +
+  `Coppie: BTC / ETH\n` +
+  `🔒 Ordini reali: DISABILITATI`
 );
 
 log(
@@ -2397,15 +2496,6 @@ setInterval(
 
 // ============================================================
 // LIVE ENGINE HEARTBEAT
-// ============================================================
-//
-// Questo messaggio viene prodotto ogni 10 secondi.
-// Serve a verificare che il processo continui a girare
-// anche se il pannello Live Tail non visualizza subito nuovi log.
-//
-// NON modifica il trading.
-// NON crea conferme.
-// NON esegue PAPER TRADE.
 // ============================================================
 
 setInterval(
