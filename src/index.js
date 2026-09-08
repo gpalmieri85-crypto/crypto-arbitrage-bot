@@ -1,15 +1,20 @@
 const WebSocket = require("ws");
 
 // ============================================================
-// CONFIGURAZIONE
+// CRYPTO ARBITRAGE PAPER ENGINE
 // ============================================================
 
 const CONFIG = {
+  // ==========================================================
+  // COPPIE
+  // ==========================================================
+
   pairs: {
     BTC: {
       coinbase: "BTC-USD",
       okx: "BTC-USDT"
     },
+
     ETH: {
       coinbase: "ETH-USD",
       okx: "ETH-USDT"
@@ -28,93 +33,93 @@ const CONFIG = {
   // Profitto netto minimo richiesto
   minNetProfitPercent: 0.10,
 
-  // Numero di conferme consecutive necessarie
+  // Numero di conferme consecutive richieste
   requiredConfirmations: 3,
 
-  // Commissioni simulate
+  // ==========================================================
+  // COMMISSIONI
+  // ==========================================================
+
   coinbaseFeePercent: 0.60,
   okxFeePercent: 0.10,
 
-  // Slippage simulato per ogni lato
-  slippagePercent: 0.05,
+  // ==========================================================
+  // SLIPPAGE
+  // ==========================================================
 
-  // USD ≈ USDT
+  coinbaseSlippagePercent: 0.05,
+  okxSlippagePercent: 0.05,
+
+  // ==========================================================
+  // CONVERSIONE USD / USDT
+  // ==========================================================
+
   usdToUsdt: 1.0,
 
-  // SICUREZZA
-  paperTrading: true,
-  realOrdersEnabled: false,
+  // ==========================================================
+  // TIMING
+  // ==========================================================
 
-  // Evita operazioni ripetute troppo velocemente
   opportunityCooldown: 10000,
-
-  // Prezzi considerati validi solo se recenti
-  maxPriceAge: 5000,
-
-  // Riconnessione
   reconnectDelay: 5000,
 
-  // Status
-  statusInterval: 10000
+  // Report periodico
+  statusInterval: 30000
 };
 
 // ============================================================
-// ORDER BOOK
+// PAPER PORTFOLIO
+// ============================================================
+
+const paper = {
+  initialCapital: CONFIG.initialCapital,
+
+  capital: CONFIG.initialCapital,
+
+  totalProfit: 0,
+
+  trades: 0,
+
+  winningTrades: 0,
+
+  losingTrades: 0,
+
+  volume: 0,
+
+  lastTradeTime: {
+    BTC: 0,
+    ETH: 0
+  }
+};
+
+// ============================================================
+// MARKET BOOKS
 // ============================================================
 
 const books = {
   BTC: {
     coinbase: {
       bid: null,
-      ask: null,
-      bidSize: null,
-      askSize: null,
-      updatedAt: 0
+      ask: null
     },
 
     okx: {
       bid: null,
-      ask: null,
-      bidSize: null,
-      askSize: null,
-      updatedAt: 0
+      ask: null
     }
   },
 
   ETH: {
     coinbase: {
       bid: null,
-      ask: null,
-      bidSize: null,
-      askSize: null,
-      updatedAt: 0
+      ask: null
     },
 
     okx: {
       bid: null,
-      ask: null,
-      bidSize: null,
-      askSize: null,
-      updatedAt: 0
+      ask: null
     }
   }
-};
-
-// ============================================================
-// PORTAFOGLIO PAPER
-// ============================================================
-
-const portfolio = {
-  startingCapital: CONFIG.initialCapital,
-  capital: CONFIG.initialCapital,
-
-  totalProfit: 0,
-
-  operations: 0,
-  winningOperations: 0,
-  losingOperations: 0,
-
-  totalVolume: 0
 };
 
 // ============================================================
@@ -122,22 +127,6 @@ const portfolio = {
 // ============================================================
 
 const confirmations = {
-  BTC: {
-    cbToOkx: 0,
-    okxToCb: 0
-  },
-
-  ETH: {
-    cbToOkx: 0,
-    okxToCb: 0
-  }
-};
-
-// ============================================================
-// ULTIMA OPERAZIONE
-// ============================================================
-
-const lastTrade = {
   BTC: {
     cbToOkx: 0,
     okxToCb: 0
@@ -158,7 +147,11 @@ const stats = {
   coinbaseUpdates: 0,
 
   okxMessages: 0,
-  okxUpdates: 0
+  okxUpdates: 0,
+
+  opportunities: 0,
+
+  profitableOpportunities: 0
 };
 
 // ============================================================
@@ -172,6 +165,22 @@ function now() {
 function log(message) {
   console.log(`[${now()}] ${message}`);
 }
+
+function money(value) {
+  return `€${value.toFixed(2)}`;
+}
+
+function pct(value) {
+  return `${value.toFixed(4)}%`;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ============================================================
+// PAIR LOOKUP
+// ============================================================
 
 function getPairByCoinbaseProduct(productId) {
   for (const [symbol, pair] of Object.entries(CONFIG.pairs)) {
@@ -193,90 +202,17 @@ function getPairByOKXProduct(instId) {
   return null;
 }
 
-function isFresh(book) {
-  if (!book.updatedAt) {
-    return false;
-  }
-
-  return (
-    Date.now() - book.updatedAt <=
-    CONFIG.maxPriceAge
-  );
-}
-
-// ============================================================
-// CALCOLO PROFITTO NETTO
-// ============================================================
-
-function calculateNetProfitPercent(
-  buyPrice,
-  sellPrice,
-  buyFee,
-  sellFee
-) {
-  if (
-    !Number.isFinite(buyPrice) ||
-    !Number.isFinite(sellPrice) ||
-    buyPrice <= 0 ||
-    sellPrice <= 0
-  ) {
-    return -Infinity;
-  }
-
-  const effectiveBuyPrice =
-    buyPrice *
-    (
-      1 +
-      (
-        buyFee +
-        CONFIG.slippagePercent
-      ) / 100
-    );
-
-  const effectiveSellPrice =
-    sellPrice *
-    (
-      1 -
-      (
-        sellFee +
-        CONFIG.slippagePercent
-      ) / 100
-    );
-
-  return (
-    (
-      (
-        effectiveSellPrice -
-        effectiveBuyPrice
-      ) /
-      effectiveBuyPrice
-    ) *
-    100
-  );
-}
-
 // ============================================================
 // COINBASE
 // ============================================================
 
 function updateCoinbase(data) {
-  stats.coinbaseMessages++;
-
-  if (
-    !data ||
-    !Array.isArray(data.events)
-  ) {
+  if (!data || !Array.isArray(data.events)) {
     return;
   }
 
   for (const event of data.events) {
-    if (!event) {
-      continue;
-    }
-
-    if (
-      !Array.isArray(event.tickers)
-    ) {
+    if (!event || !Array.isArray(event.tickers)) {
       continue;
     }
 
@@ -285,73 +221,46 @@ function updateCoinbase(data) {
         continue;
       }
 
-      const symbol =
-        getPairByCoinbaseProduct(
-          ticker.product_id
-        );
+      const symbol = getPairByCoinbaseProduct(
+        ticker.product_id
+      );
 
       if (!symbol) {
         continue;
       }
 
-      const bid =
-        Number(ticker.best_bid);
+      const bid = Number(ticker.best_bid);
+      const ask = Number(ticker.best_ask);
 
-      const ask =
-        Number(ticker.best_ask);
-
-      const bidSize =
-        Number(ticker.best_bid_quantity);
-
-      const askSize =
-        Number(ticker.best_ask_quantity);
+      let changed = false;
 
       if (
         Number.isFinite(bid) &&
         bid > 0
       ) {
-        books[symbol]
-          .coinbase
-          .bid = bid;
+        books[symbol].coinbase.bid = bid;
+        changed = true;
       }
 
       if (
         Number.isFinite(ask) &&
         ask > 0
       ) {
-        books[symbol]
-          .coinbase
-          .ask = ask;
+        books[symbol].coinbase.ask = ask;
+        changed = true;
       }
 
-      if (
-        Number.isFinite(bidSize) &&
-        bidSize > 0
-      ) {
-        books[symbol]
-          .coinbase
-          .bidSize = bidSize;
+      if (changed) {
+        stats.coinbaseUpdates++;
+        checkArbitrage(symbol);
       }
-
-      if (
-        Number.isFinite(askSize) &&
-        askSize > 0
-      ) {
-        books[symbol]
-          .coinbase
-          .askSize = askSize;
-      }
-
-      books[symbol]
-        .coinbase
-        .updatedAt = Date.now();
-
-      stats.coinbaseUpdates++;
-
-      checkArbitrage(symbol);
     }
   }
 }
+
+// ============================================================
+// COINBASE CONNECTION
+// ============================================================
 
 function connectCoinbase() {
   const ws = new WebSocket(
@@ -359,17 +268,17 @@ function connectCoinbase() {
   );
 
   ws.on("open", () => {
-    log(
-      "Coinbase WebSocket CONNECTED"
-    );
+    log("Coinbase WebSocket CONNECTED");
 
     ws.send(
       JSON.stringify({
         type: "subscribe",
+
         product_ids: [
           CONFIG.pairs.BTC.coinbase,
           CONFIG.pairs.ETH.coinbase
         ],
+
         channel: "ticker"
       })
     );
@@ -377,27 +286,24 @@ function connectCoinbase() {
     ws.send(
       JSON.stringify({
         type: "subscribe",
+
         channel: "heartbeats"
       })
     );
 
-    log(
-      "Coinbase subscriptions ATTIVE"
-    );
+    log("Coinbase subscriptions ATTIVE");
   });
 
   ws.on("message", raw => {
     try {
-      const text = raw.toString();
+      stats.coinbaseMessages++;
 
-      if (!text) {
-        return;
-      }
-
-      const data =
-        JSON.parse(text);
+      const data = JSON.parse(
+        raw.toString()
+      );
 
       updateCoinbase(data);
+
     } catch (error) {
       log(
         "Errore Coinbase: " +
@@ -408,8 +314,7 @@ function connectCoinbase() {
 
   ws.on("close", () => {
     log(
-      "Coinbase disconnesso. " +
-      "Riconnessione..."
+      "Coinbase disconnesso. Riconnessione..."
     );
 
     setTimeout(
@@ -431,64 +336,44 @@ function connectCoinbase() {
 // ============================================================
 
 function updateOKX(data) {
-  stats.okxMessages++;
-
-  if (
-    !data ||
-    !data.arg
-  ) {
+  if (!data || !data.arg) {
     return;
   }
 
-  if (
-    data.arg.channel !==
-    "books5"
-  ) {
+  if (data.arg.channel !== "books5") {
     return;
   }
 
-  const symbol =
-    getPairByOKXProduct(
-      data.arg.instId
-    );
+  const symbol = getPairByOKXProduct(
+    data.arg.instId
+  );
 
   if (!symbol) {
     return;
   }
 
-  const book =
-    data.data?.[0];
+  const book = data.data?.[0];
 
   if (!book) {
     return;
   }
 
+  let changed = false;
+
   if (
     Array.isArray(book.bids) &&
     book.bids.length > 0
   ) {
-    const bid =
-      Number(book.bids[0][0]);
-
-    const bidSize =
-      Number(book.bids[0][1]);
+    const bid = Number(
+      book.bids[0][0]
+    );
 
     if (
       Number.isFinite(bid) &&
       bid > 0
     ) {
-      books[symbol]
-        .okx
-        .bid = bid;
-    }
-
-    if (
-      Number.isFinite(bidSize) &&
-      bidSize > 0
-    ) {
-      books[symbol]
-        .okx
-        .bidSize = bidSize;
+      books[symbol].okx.bid = bid;
+      changed = true;
     }
   }
 
@@ -496,39 +381,28 @@ function updateOKX(data) {
     Array.isArray(book.asks) &&
     book.asks.length > 0
   ) {
-    const ask =
-      Number(book.asks[0][0]);
-
-    const askSize =
-      Number(book.asks[0][1]);
+    const ask = Number(
+      book.asks[0][0]
+    );
 
     if (
       Number.isFinite(ask) &&
       ask > 0
     ) {
-      books[symbol]
-        .okx
-        .ask = ask;
-    }
-
-    if (
-      Number.isFinite(askSize) &&
-      askSize > 0
-    ) {
-      books[symbol]
-        .okx
-        .askSize = askSize;
+      books[symbol].okx.ask = ask;
+      changed = true;
     }
   }
 
-  books[symbol]
-    .okx
-    .updatedAt = Date.now();
-
-  stats.okxUpdates++;
-
-  checkArbitrage(symbol);
+  if (changed) {
+    stats.okxUpdates++;
+    checkArbitrage(symbol);
+  }
 }
+
+// ============================================================
+// OKX CONNECTION
+// ============================================================
 
 function connectOKX() {
   const ws = new WebSocket(
@@ -536,61 +410,48 @@ function connectOKX() {
   );
 
   ws.on("open", () => {
-    log(
-      "OKX WebSocket CONNECTED"
-    );
+    log("OKX WebSocket CONNECTED");
 
     ws.send(
       JSON.stringify({
         op: "subscribe",
+
         args: [
           {
             channel: "books5",
-            instId:
-              CONFIG.pairs.BTC.okx
+            instId: CONFIG.pairs.BTC.okx
           },
+
           {
             channel: "books5",
-            instId:
-              CONFIG.pairs.ETH.okx
+            instId: CONFIG.pairs.ETH.okx
           }
         ]
       })
     );
 
-    log(
-      "OKX subscriptions ATTIVE"
-    );
+    log("OKX subscriptions ATTIVE");
   });
 
   ws.on("message", raw => {
     try {
-      const text =
-        raw.toString();
+      stats.okxMessages++;
 
+      const text = raw.toString();
+
+      // Ping testuale
       if (text === "ping") {
         ws.send("pong");
         return;
       }
 
-      if (!text) {
+      const data = JSON.parse(text);
+
+      if (data.event === "subscribe") {
         return;
       }
 
-      const data =
-        JSON.parse(text);
-
-      if (
-        data.event ===
-        "subscribe"
-      ) {
-        return;
-      }
-
-      if (
-        data.event ===
-        "error"
-      ) {
+      if (data.event === "error") {
         log(
           `OKX error ${data.code}: ${data.msg}`
         );
@@ -599,6 +460,7 @@ function connectOKX() {
       }
 
       updateOKX(data);
+
     } catch (error) {
       log(
         "Errore OKX: " +
@@ -609,8 +471,7 @@ function connectOKX() {
 
   ws.on("close", () => {
     log(
-      "OKX disconnesso. " +
-      "Riconnessione..."
+      "OKX disconnesso. Riconnessione..."
     );
 
     setTimeout(
@@ -628,145 +489,307 @@ function connectOKX() {
 }
 
 // ============================================================
-// VERIFICA ARBITRAGGIO
+// ARBITRAGGIO
 // ============================================================
 
 function checkArbitrage(symbol) {
-  const cb =
-    books[symbol].coinbase;
-
-  const okx =
-    books[symbol].okx;
+  const cb = books[symbol].coinbase;
+  const okx = books[symbol].okx;
 
   if (
-    !cb.bid ||
-    !cb.ask ||
-    !okx.bid ||
-    !okx.ask
-  ) {
-    return;
-  }
-
-  if (
-    !isFresh(cb) ||
-    !isFresh(okx)
+    !Number.isFinite(cb.bid) ||
+    !Number.isFinite(cb.ask) ||
+    !Number.isFinite(okx.bid) ||
+    !Number.isFinite(okx.ask)
   ) {
     return;
   }
 
   // ==========================================================
-  // COINBASE -> OKX
+  // CONVERSIONE USD / USDT
   // ==========================================================
 
-  const cbToOkxGross =
+  const okxBidUSD =
+    okx.bid /
+    CONFIG.usdToUsdt;
+
+  const okxAskUSD =
+    okx.ask /
+    CONFIG.usdToUsdt;
+
+  // ==========================================================
+  // DIREZIONE 1
+  //
+  // COMPRA COINBASE
+  // VENDE OKX
+  // ==========================================================
+
+  const grossCBtoOKX =
     (
-      (okx.bid - cb.ask) /
+      (okxBidUSD - cb.ask) /
       cb.ask
     ) * 100;
 
-  const cbToOkxNet =
-    calculateNetProfitPercent(
-      cb.ask,
-      okx.bid,
-      CONFIG.coinbaseFeePercent,
-      CONFIG.okxFeePercent
+  // Prezzo effettivo di acquisto
+  const effectiveCBBuy =
+    cb.ask *
+    (
+      1 +
+      CONFIG.coinbaseSlippagePercent / 100
     );
 
-  // ==========================================================
-  // OKX -> COINBASE
-  // ==========================================================
-
-  const okxToCbGross =
+  // Prezzo effettivo di vendita
+  const effectiveOKXSell =
+    okxBidUSD *
     (
-      (cb.bid - okx.ask) /
-      okx.ask
+      1 -
+      CONFIG.okxSlippagePercent / 100
+    );
+
+  const netCBtoOKX =
+    (
+      (
+        (
+          effectiveOKXSell *
+          (
+            1 -
+            CONFIG.okxFeePercent / 100
+          )
+        ) -
+        (
+          effectiveCBBuy *
+          (
+            1 +
+            CONFIG.coinbaseFeePercent / 100
+          )
+        )
+      ) /
+      (
+        effectiveCBBuy *
+        (
+          1 +
+          CONFIG.coinbaseFeePercent / 100
+        )
+      )
     ) * 100;
 
-  const okxToCbNet =
-    calculateNetProfitPercent(
-      okx.ask,
-      cb.bid,
-      CONFIG.okxFeePercent,
-      CONFIG.coinbaseFeePercent
+  // ==========================================================
+  // DIREZIONE 2
+  //
+  // COMPRA OKX
+  // VENDE COINBASE
+  // ==========================================================
+
+  const grossOKXtoCB =
+    (
+      (cb.bid - okxAskUSD) /
+      okxAskUSD
+    ) * 100;
+
+  const effectiveOKXBuy =
+    okxAskUSD *
+    (
+      1 +
+      CONFIG.okxSlippagePercent / 100
     );
 
+  const effectiveCBSell =
+    cb.bid *
+    (
+      1 -
+      CONFIG.coinbaseSlippagePercent / 100
+    );
+
+  const netOKXtoCB =
+    (
+      (
+        (
+          effectiveCBSell *
+          (
+            1 -
+            CONFIG.coinbaseFeePercent / 100
+          )
+        ) -
+        (
+          effectiveOKXBuy *
+          (
+            1 +
+            CONFIG.okxFeePercent / 100
+          )
+        )
+      ) /
+      (
+        effectiveOKXBuy *
+        (
+          1 +
+          CONFIG.okxFeePercent / 100
+        )
+      )
+    ) * 100;
+
   // ==========================================================
-  // CONFERMA CB -> OKX
+  // BREAK EVEN
+  // ==========================================================
+
+  const breakEven =
+    CONFIG.coinbaseFeePercent +
+    CONFIG.okxFeePercent +
+    CONFIG.coinbaseSlippagePercent +
+    CONFIG.okxSlippagePercent;
+
+  stats.opportunities++;
+
+  // ==========================================================
+  // CONFERME
   // ==========================================================
 
   if (
-    cbToOkxNet >=
+    netCBtoOKX >=
     CONFIG.minNetProfitPercent
   ) {
-    confirmations[symbol]
-      .cbToOkx++;
-
-    confirmations[symbol]
-      .okxToCb = 0;
-
-    if (
-      confirmations[symbol]
-        .cbToOkx >=
-      CONFIG.requiredConfirmations
-    ) {
-      executePaperTrade(
-        symbol,
-        "Coinbase",
-        cb.ask,
-        "OKX",
-        okx.bid,
-        cb.askSize,
-        okx.bidSize,
-        cbToOkxGross,
-        cbToOkxNet,
-        "cbToOkx"
-      );
-    }
+    confirmations[symbol].cbToOkx++;
   } else {
-    confirmations[symbol]
-      .cbToOkx = 0;
+    confirmations[symbol].cbToOkx = 0;
+  }
+
+  if (
+    netOKXtoCB >=
+    CONFIG.minNetProfitPercent
+  ) {
+    confirmations[symbol].okxToCb++;
+  } else {
+    confirmations[symbol].okxToCb = 0;
   }
 
   // ==========================================================
-  // CONFERMA OKX -> COINBASE
+  // DISPLAY
+  // ==========================================================
+
+  displayStatus(
+    symbol,
+    cb,
+    okx,
+    grossCBtoOKX,
+    netCBtoOKX,
+    grossOKXtoCB,
+    netOKXtoCB,
+    breakEven
+  );
+
+  // ==========================================================
+  // PAPER TRADE
   // ==========================================================
 
   if (
-    okxToCbNet >=
-    CONFIG.minNetProfitPercent
+    confirmations[symbol].cbToOkx >=
+    CONFIG.requiredConfirmations
   ) {
-    confirmations[symbol]
-      .okxToCb++;
+    stats.profitableOpportunities++;
 
-    confirmations[symbol]
-      .cbToOkx = 0;
+    executePaperTrade(
+      symbol,
+      "Coinbase",
+      cb.ask,
+      "OKX",
+      okxBidUSD,
+      grossCBtoOKX,
+      netCBtoOKX
+    );
 
-    if (
-      confirmations[symbol]
-        .okxToCb >=
-      CONFIG.requiredConfirmations
-    ) {
-      executePaperTrade(
-        symbol,
-        "OKX",
-        okx.ask,
-        "Coinbase",
-        cb.bid,
-        okx.askSize,
-        cb.bidSize,
-        okxToCbGross,
-        okxToCbNet,
-        "okxToCb"
-      );
-    }
-  } else {
-    confirmations[symbol]
-      .okxToCb = 0;
+    confirmations[symbol].cbToOkx = 0;
+  }
+
+  if (
+    confirmations[symbol].okxToCb >=
+    CONFIG.requiredConfirmations
+  ) {
+    stats.profitableOpportunities++;
+
+    executePaperTrade(
+      symbol,
+      "OKX",
+      okxAskUSD,
+      "Coinbase",
+      cb.bid,
+      grossOKXtoCB,
+      netOKXtoCB
+    );
+
+    confirmations[symbol].okxToCb = 0;
   }
 }
 
 // ============================================================
-// ESECUZIONE PAPER
+// MARKET STATUS
+// ============================================================
+
+function displayStatus(
+  symbol,
+  cb,
+  okx,
+  gross1,
+  net1,
+  gross2,
+  net2,
+  breakEven
+) {
+  console.log("");
+
+  console.log(
+    "--------------------------------------------------------"
+  );
+
+  console.log(
+    `📊 ${symbol}`
+  );
+
+  console.log(
+    `Coinbase -> BID: ${cb.bid.toFixed(2)} | ASK: ${cb.ask.toFixed(2)}`
+  );
+
+  console.log(
+    `OKX      -> BID: ${okx.bid.toFixed(2)} | ASK: ${okx.ask.toFixed(2)}`
+  );
+
+  console.log(
+    `CB -> OKX | Lordo: ${pct(gross1)} | Netto: ${pct(net1)}`
+  );
+
+  console.log(
+    `OKX -> CB | Lordo: ${pct(gross2)} | Netto: ${pct(net2)}`
+  );
+
+  console.log(
+    `Break-even: ${pct(breakEven)}`
+  );
+
+  console.log(
+    `Conferma CB -> OKX: ${confirmations[symbol].cbToOkx}/${CONFIG.requiredConfirmations}`
+  );
+
+  console.log(
+    `Conferma OKX -> CB: ${confirmations[symbol].okxToCb}/${CONFIG.requiredConfirmations}`
+  );
+
+  console.log(
+    `💰 Capitale PAPER: ${money(paper.capital)}`
+  );
+
+  console.log(
+    `💵 Profitto totale: ${money(paper.totalProfit)}`
+  );
+
+  console.log(
+    `📈 Operazioni: ${paper.trades}`
+  );
+
+  console.log(
+    `--------------------------------------------------------`
+  );
+}
+
+// ============================================================
+// PAPER TRADE
 // ============================================================
 
 function executePaperTrade(
@@ -775,111 +798,43 @@ function executePaperTrade(
   buyPrice,
   sellExchange,
   sellPrice,
-  buyLiquidity,
-  sellLiquidity,
   grossPercent,
-  netPercent,
-  direction
+  netPercent
 ) {
-  if (!CONFIG.paperTrading) {
-    return;
-  }
-
-  if (CONFIG.realOrdersEnabled) {
-    log(
-      "BLOCCO SICUREZZA: " +
-      "ordini reali disabilitati."
-    );
-
-    return;
-  }
-
   const currentTime =
     Date.now();
 
-  const previousTrade =
-    lastTrade[symbol][direction];
+  // ==========================================================
+  // COOLDOWN
+  // ==========================================================
 
   if (
     currentTime -
-    previousTrade <
+      paper.lastTradeTime[symbol] <
     CONFIG.opportunityCooldown
   ) {
     return;
   }
 
-  lastTrade[symbol][direction] =
-    currentTime;
-
   // ==========================================================
   // CAPITALE OPERAZIONE
   // ==========================================================
 
-  const desiredCapital =
-    portfolio.capital *
+  const tradeAmount =
+    paper.capital *
     (
       CONFIG.tradePercentOfCapital /
       100
     );
 
   if (
-    desiredCapital <= 0
+    tradeAmount <= 0 ||
+    paper.capital < tradeAmount
   ) {
-    return;
-  }
+    log(
+      "⚠️ Capitale PAPER insufficiente"
+    );
 
-  // ==========================================================
-  // QUANTITÀ ACQUISTABILE
-  // ==========================================================
-
-  const quantityFromCapital =
-    desiredCapital /
-    buyPrice;
-
-  let executableQuantity =
-    quantityFromCapital;
-
-  // Controllo liquidità lato BUY
-  if (
-    Number.isFinite(buyLiquidity) &&
-    buyLiquidity > 0
-  ) {
-    executableQuantity =
-      Math.min(
-        executableQuantity,
-        buyLiquidity
-      );
-  }
-
-  // Controllo liquidità lato SELL
-  if (
-    Number.isFinite(sellLiquidity) &&
-    sellLiquidity > 0
-  ) {
-    executableQuantity =
-      Math.min(
-        executableQuantity,
-        sellLiquidity
-      );
-  }
-
-  if (
-    !Number.isFinite(
-      executableQuantity
-    ) ||
-    executableQuantity <= 0
-  ) {
-    return;
-  }
-
-  const actualCapital =
-    executableQuantity *
-    buyPrice;
-
-  if (
-    actualCapital >
-    portfolio.capital
-  ) {
     return;
   }
 
@@ -888,30 +843,30 @@ function executePaperTrade(
   // ==========================================================
 
   const profit =
-    actualCapital *
+    tradeAmount *
     (
       netPercent / 100
     );
 
-  const capitalBefore =
-    portfolio.capital;
+  const previousCapital =
+    paper.capital;
 
-  portfolio.capital +=
-    profit;
+  paper.capital += profit;
 
-  portfolio.totalProfit +=
-    profit;
+  paper.totalProfit += profit;
 
-  portfolio.operations++;
+  paper.trades++;
 
-  portfolio.totalVolume +=
-    actualCapital;
+  paper.volume += tradeAmount;
 
-  if (profit >= 0) {
-    portfolio.winningOperations++;
+  if (profit > 0) {
+    paper.winningTrades++;
   } else {
-    portfolio.losingOperations++;
+    paper.losingTrades++;
   }
+
+  paper.lastTradeTime[symbol] =
+    currentTime;
 
   // ==========================================================
   // REPORT
@@ -924,7 +879,7 @@ function executePaperTrade(
   );
 
   console.log(
-    "🚨 PAPER ARBITRAGE ESEGUITO"
+    "🚨🚨🚨 PAPER TRADE ESEGUITO 🚨🚨🚨"
   );
 
   console.log(
@@ -936,279 +891,43 @@ function executePaperTrade(
   );
 
   console.log(
-    `BUY:  ${buyExchange} @ ` +
-    `${buyPrice.toFixed(2)}`
+    `BUY:  ${buyExchange} @ ${buyPrice.toFixed(2)}`
   );
 
   console.log(
-    `SELL: ${sellExchange} @ ` +
-    `${sellPrice.toFixed(2)}`
+    `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}`
   );
 
   console.log(
-    `QUANTITÀ: ` +
-    `${executableQuantity.toFixed(8)} ${symbol}`
+    `SPREAD LORDO: ${pct(grossPercent)}`
   );
 
   console.log(
-    `CAPITALE UTILIZZATO: ` +
-    `€${actualCapital.toFixed(2)}`
+    `PROFITTO NETTO: ${pct(netPercent)}`
   );
 
   console.log(
-    `SPREAD LORDO: ` +
-    `${grossPercent.toFixed(4)}%`
+    `CAPITALE OPERAZIONE: ${money(tradeAmount)}`
   );
 
   console.log(
-    `PROFITTO NETTO: ` +
-    `${netPercent.toFixed(4)}%`
+    `PROFITTO: ${money(profit)}`
   );
 
   console.log(
-    `PROFITTO OPERAZIONE: ` +
-    `€${profit.toFixed(4)}`
+    `CAPITALE PRIMA: ${money(previousCapital)}`
   );
 
   console.log(
-    `CAPITALE PRIMA: ` +
-    `€${capitalBefore.toFixed(2)}`
+    `CAPITALE DOPO: ${money(paper.capital)}`
   );
 
   console.log(
-    `CAPITALE DOPO: ` +
-    `€${portfolio.capital.toFixed(2)}`
+    `PROFITTO TOTALE: ${money(paper.totalProfit)}`
   );
 
   console.log(
-    `PROFITTO TOTALE: ` +
-    `€${portfolio.totalProfit.toFixed(4)}`
-  );
-
-  console.log(
-    `OPERAZIONI: ` +
-    `${portfolio.operations}`
-  );
-
-  console.log(
-    `LIQUIDITÀ BUY: ` +
-    `${Number.isFinite(buyLiquidity) ? buyLiquidity : "N/D"}`
-  );
-
-  console.log(
-    `LIQUIDITÀ SELL: ` +
-    `${Number.isFinite(sellLiquidity) ? sellLiquidity : "N/D"}`
-  );
-
-  console.log(
-    "MODE: PAPER TRADING"
-  );
-
-  console.log(
-    "REAL ORDERS: DISABLED"
-  );
-
-  console.log(
-    "========================================================"
-  );
-
-  console.log("");
-}
-
-// ============================================================
-// STATUS
-// ============================================================
-
-function printStatus() {
-  console.log("");
-
-  console.log(
-    "========================================================"
-  );
-
-  console.log(
-    `📊 STATUS ${now()}`
-  );
-
-  console.log(
-    "========================================================"
-  );
-
-  for (
-    const symbol of ["BTC", "ETH"]
-  ) {
-    const cb =
-      books[symbol].coinbase;
-
-    const okx =
-      books[symbol].okx;
-
-    console.log("");
-
-    console.log(
-      `📈 ${symbol}`
-    );
-
-    if (
-      cb.bid &&
-      cb.ask &&
-      okx.bid &&
-      okx.ask
-    ) {
-      const cbToOkxGross =
-        (
-          (okx.bid - cb.ask) /
-          cb.ask
-        ) * 100;
-
-      const okxToCbGross =
-        (
-          (cb.bid - okx.ask) /
-          okx.ask
-        ) * 100;
-
-      const cbToOkxNet =
-        calculateNetProfitPercent(
-          cb.ask,
-          okx.bid,
-          CONFIG.coinbaseFeePercent,
-          CONFIG.okxFeePercent
-        );
-
-      const okxToCbNet =
-        calculateNetProfitPercent(
-          okx.ask,
-          cb.bid,
-          CONFIG.okxFeePercent,
-          CONFIG.coinbaseFeePercent
-        );
-
-      console.log(
-        `Coinbase -> BID: ` +
-        `${cb.bid.toFixed(2)} | ASK: ` +
-        `${cb.ask.toFixed(2)}`
-      );
-
-      console.log(
-        `OKX      -> BID: ` +
-        `${okx.bid.toFixed(2)} | ASK: ` +
-        `${okx.ask.toFixed(2)}`
-      );
-
-      console.log(
-        `CB -> OKX | Lordo: ` +
-        `${cbToOkxGross.toFixed(4)}% | ` +
-        `Netto: ${cbToOkxNet.toFixed(4)}%`
-      );
-
-      console.log(
-        `OKX -> CB | Lordo: ` +
-        `${okxToCbGross.toFixed(4)}% | ` +
-        `Netto: ${okxToCbNet.toFixed(4)}%`
-      );
-
-      console.log(
-        `Conferme CB -> OKX: ` +
-        `${confirmations[symbol].cbToOkx}/` +
-        `${CONFIG.requiredConfirmations}`
-      );
-
-      console.log(
-        `Conferme OKX -> CB: ` +
-        `${confirmations[symbol].okxToCb}/` +
-        `${CONFIG.requiredConfirmations}`
-      );
-    } else {
-      console.log(
-        "In attesa dei prezzi..."
-      );
-    }
-  }
-
-  console.log("");
-
-  console.log(
-    "--------------------------------------------------------"
-  );
-
-  console.log(
-    `💰 Capitale PAPER: ` +
-    `€${portfolio.capital.toFixed(2)}`
-  );
-
-  console.log(
-    `💵 Profitto totale: ` +
-    `€${portfolio.totalProfit.toFixed(4)}`
-  );
-
-  console.log(
-    `📈 Operazioni: ` +
-    `${portfolio.operations}`
-  );
-
-  console.log(
-    `✅ Vincenti: ` +
-    `${portfolio.winningOperations}`
-  );
-
-  console.log(
-    `❌ Perdenti: ` +
-    `${portfolio.losingOperations}`
-  );
-
-  console.log(
-    `💱 Volume PAPER: ` +
-    `€${portfolio.totalVolume.toFixed(2)}`
-  );
-
-  console.log("");
-
-  console.log(
-    `Coinbase messaggi: ` +
-    `${stats.coinbaseMessages} | ` +
-    `Aggiornamenti: ${stats.coinbaseUpdates}`
-  );
-
-  console.log(
-    `OKX messaggi: ` +
-    `${stats.okxMessages} | ` +
-    `Aggiornamenti: ${stats.okxUpdates}`
-  );
-
-  console.log("");
-
-  console.log(
-    `Soglia netto: ` +
-    `${CONFIG.minNetProfitPercent}%`
-  );
-
-  console.log(
-    `Conferme richieste: ` +
-    `${CONFIG.requiredConfirmations}`
-  );
-
-  console.log(
-    `Trade: ` +
-    `${CONFIG.tradePercentOfCapital}% capitale`
-  );
-
-  console.log(
-    `Commissione Coinbase: ` +
-    `${CONFIG.coinbaseFeePercent}%`
-  );
-
-  console.log(
-    `Commissione OKX: ` +
-    `${CONFIG.okxFeePercent}%`
-  );
-
-  console.log(
-    `Slippage: ` +
-    `${CONFIG.slippagePercent}% per lato`
-  );
-
-  console.log(
-    "--------------------------------------------------------"
+    `OPERAZIONI TOTALI: ${paper.trades}`
   );
 
   console.log(
@@ -1223,7 +942,141 @@ function printStatus() {
 }
 
 // ============================================================
-// AVVIO
+// REPORT PORTAFOGLIO
+// ============================================================
+
+function printPortfolio() {
+  const roi =
+    (
+      paper.totalProfit /
+      paper.initialCapital
+    ) * 100;
+
+  console.log("");
+
+  console.log(
+    "========================================================"
+  );
+
+  console.log(
+    "💰 PAPER TRADING REPORT"
+  );
+
+  console.log(
+    "========================================================"
+  );
+
+  console.log(
+    `Capitale iniziale: ${money(
+      paper.initialCapital
+    )}`
+  );
+
+  console.log(
+    `Capitale attuale:  ${money(
+      paper.capital
+    )}`
+  );
+
+  console.log(
+    `Profitto totale:   ${money(
+      paper.totalProfit
+    )}`
+  );
+
+  console.log(
+    `ROI:               ${pct(roi)}`
+  );
+
+  console.log(
+    `Operazioni:        ${paper.trades}`
+  );
+
+  console.log(
+    `Vincenti:          ${paper.winningTrades}`
+  );
+
+  console.log(
+    `Perdenti:          ${paper.losingTrades}`
+  );
+
+  console.log(
+    `Volume PAPER:      ${money(
+      paper.volume
+    )}`
+  );
+
+  console.log(
+    `Opportunità viste: ${stats.opportunities}`
+  );
+
+  console.log(
+    `Opportunità profittevoli: ${stats.profitableOpportunities}`
+  );
+
+  console.log("");
+
+  console.log(
+    `Coinbase messaggi: ${stats.coinbaseMessages}`
+  );
+
+  console.log(
+    `Coinbase update:   ${stats.coinbaseUpdates}`
+  );
+
+  console.log(
+    `OKX messaggi:      ${stats.okxMessages}`
+  );
+
+  console.log(
+    `OKX update:        ${stats.okxUpdates}`
+  );
+
+  console.log("");
+
+  console.log(
+    `Soglia netto: ${CONFIG.minNetProfitPercent}%`
+  );
+
+  console.log(
+    `Conferme richieste: ${CONFIG.requiredConfirmations}`
+  );
+
+  console.log(
+    `Trade: ${CONFIG.tradePercentOfCapital}% del capitale`
+  );
+
+  console.log(
+    `Commissione Coinbase: ${CONFIG.coinbaseFeePercent}%`
+  );
+
+  console.log(
+    `Commissione OKX: ${CONFIG.okxFeePercent}%`
+  );
+
+  console.log(
+    `Slippage Coinbase: ${CONFIG.coinbaseSlippagePercent}%`
+  );
+
+  console.log(
+    `Slippage OKX: ${CONFIG.okxSlippagePercent}%`
+  );
+
+  console.log("");
+
+  console.log(
+    "🔒 ORDINI REALI: DISABILITATI"
+  );
+
+  console.log(
+    "========================================================"
+  );
+
+  console.log("");
+}
+
+// ============================================================
+// START
 // ============================================================
 
 log(
@@ -1231,7 +1084,7 @@ log(
 );
 
 log(
-  "🚀 CRYPTO ARBITRAGE PAPER ENGINE v2"
+  "🚀 CRYPTO ARBITRAGE PAPER ENGINE v3"
 );
 
 log(
@@ -1243,11 +1096,13 @@ log(
 );
 
 log(
-  `Capitale iniziale: €${CONFIG.initialCapital.toFixed(2)}`
+  `Capitale iniziale: ${money(
+    CONFIG.initialCapital
+  )}`
 );
 
 log(
-  `Trade per operazione: ${CONFIG.tradePercentOfCapital}%`
+  `Trade: ${CONFIG.tradePercentOfCapital}% del capitale`
 );
 
 log(
@@ -1267,22 +1122,35 @@ log(
 );
 
 log(
-  `Slippage per lato: ${CONFIG.slippagePercent}%`
+  `Slippage Coinbase: ${CONFIG.coinbaseSlippagePercent}%`
 );
 
 log(
-  "ORDINI REALI: DISABILITATI"
+  `Slippage OKX: ${CONFIG.okxSlippagePercent}%`
+);
+
+log(
+  "🔒 ORDINI REALI: DISABILITATI"
 );
 
 log(
   "========================================================"
 );
 
+// ============================================================
+// CONNESSIONI
+// ============================================================
+
 connectCoinbase();
+
 connectOKX();
 
+// ============================================================
+// REPORT AUTOMATICO
+// ============================================================
+
 setInterval(
-  printStatus,
+  printPortfolio,
   CONFIG.statusInterval
 );
 
