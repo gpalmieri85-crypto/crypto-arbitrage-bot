@@ -10,48 +10,62 @@ const CONFIG = {
       coinbase: "BTC-USD",
       okx: "BTC-USDT"
     },
+
     ETH: {
       coinbase: "ETH-USD",
       okx: "ETH-USDT"
     }
   },
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // PAPER TRADING
-  // ----------------------------------------------------------
+  // ==========================================================
 
   initialCapital: 1000,
 
-  // Importo virtuale utilizzato per ogni operazione
   tradeAmount: 100,
 
-  // Commissione simulata per ogni lato
-  feePercent: 0.40,
-
-  // Slippage simulato per ogni lato
-  slippagePercent: 0.05,
-
-  // Profitto netto minimo richiesto
+  // Profitto NETTO minimo richiesto
   minNetProfitPercent: 0.10,
 
-  // Evita di ripetere la stessa operazione continuamente
+  // ==========================================================
+  // COMMISSIONI
+  // ==========================================================
+
+  // Valori configurabili.
+  // Sono utilizzati solo per il PAPER TRADING.
+
+  coinbaseFeePercent: 0.60,
+
+  okxFeePercent: 0.10,
+
+  // ==========================================================
+  // SLIPPAGE
+  // ==========================================================
+
+  coinbaseSlippagePercent: 0.05,
+
+  okxSlippagePercent: 0.05,
+
+  // ==========================================================
+  // ALTRE IMPOSTAZIONI
+  // ==========================================================
+
+  usdToUsdt: 1.0,
+
   opportunityCooldown: 10000,
 
-  // Connessione
-  reconnectDelay: 5000,
-
-  // USD ≈ USDT
-  usdToUsdt: 1.0
+  reconnectDelay: 5000
 };
 
 // ============================================================
-// STATO PAPER TRADING
+// PAPER PORTFOLIO
 // ============================================================
 
 const paper = {
-  capital: CONFIG.initialCapital,
-
   initialCapital: CONFIG.initialCapital,
+
+  capital: CONFIG.initialCapital,
 
   totalProfit: 0,
 
@@ -70,7 +84,7 @@ const paper = {
 };
 
 // ============================================================
-// ORDER BOOK
+// MARKET DATA
 // ============================================================
 
 const books = {
@@ -100,7 +114,7 @@ const books = {
 };
 
 // ============================================================
-// STATISTICHE CONNESSIONI
+// STATISTICHE
 // ============================================================
 
 const stats = {
@@ -108,7 +122,11 @@ const stats = {
   coinbaseUpdates: 0,
 
   okxMessages: 0,
-  okxUpdates: 0
+  okxUpdates: 0,
+
+  opportunities: 0,
+
+  profitableOpportunities: 0
 };
 
 // ============================================================
@@ -127,9 +145,13 @@ function money(value) {
   return `€${value.toFixed(2)}`;
 }
 
-function percent(value) {
+function pct(value) {
   return `${value.toFixed(4)}%`;
 }
+
+// ============================================================
+// PAIR LOOKUP
+// ============================================================
 
 function getPairByCoinbaseProduct(productId) {
   for (const [symbol, pair] of Object.entries(CONFIG.pairs)) {
@@ -152,7 +174,7 @@ function getPairByOKXProduct(instId) {
 }
 
 // ============================================================
-// COINBASE
+// COINBASE UPDATE
 // ============================================================
 
 function updateCoinbase(data) {
@@ -170,23 +192,33 @@ function updateCoinbase(data) {
         continue;
       }
 
-      const productId = ticker.product_id;
-
-      const symbol = getPairByCoinbaseProduct(productId);
+      const symbol =
+        getPairByCoinbaseProduct(
+          ticker.product_id
+        );
 
       if (!symbol) {
         continue;
       }
 
-      const bid = Number(ticker.best_bid);
-      const ask = Number(ticker.best_ask);
+      const bid =
+        Number(ticker.best_bid);
 
-      if (Number.isFinite(bid) && bid > 0) {
+      const ask =
+        Number(ticker.best_ask);
+
+      if (
+        Number.isFinite(bid) &&
+        bid > 0
+      ) {
         books[symbol].coinbase.bid = bid;
         stats.coinbaseUpdates++;
       }
 
-      if (Number.isFinite(ask) && ask > 0) {
+      if (
+        Number.isFinite(ask) &&
+        ask > 0
+      ) {
         books[symbol].coinbase.ask = ask;
       }
 
@@ -196,7 +228,7 @@ function updateCoinbase(data) {
 }
 
 // ============================================================
-// CONNECT COINBASE
+// COINBASE CONNECTION
 // ============================================================
 
 function connectCoinbase() {
@@ -210,10 +242,12 @@ function connectCoinbase() {
     ws.send(
       JSON.stringify({
         type: "subscribe",
+
         product_ids: [
           CONFIG.pairs.BTC.coinbase,
           CONFIG.pairs.ETH.coinbase
         ],
+
         channel: "ticker"
       })
     );
@@ -221,6 +255,7 @@ function connectCoinbase() {
     ws.send(
       JSON.stringify({
         type: "subscribe",
+
         channel: "heartbeats"
       })
     );
@@ -232,9 +267,8 @@ function connectCoinbase() {
     try {
       stats.coinbaseMessages++;
 
-      const text = raw.toString();
-
-      const data = JSON.parse(text);
+      const data =
+        JSON.parse(raw.toString());
 
       updateCoinbase(data);
 
@@ -266,7 +300,7 @@ function connectCoinbase() {
 }
 
 // ============================================================
-// OKX
+// OKX UPDATE
 // ============================================================
 
 function updateOKX(data) {
@@ -274,20 +308,23 @@ function updateOKX(data) {
     return;
   }
 
-  if (data.arg.channel !== "books5") {
+  if (
+    data.arg.channel !== "books5"
+  ) {
     return;
   }
 
-  const instId = data.arg.instId;
-
   const symbol =
-    getPairByOKXProduct(instId);
+    getPairByOKXProduct(
+      data.arg.instId
+    );
 
   if (!symbol) {
     return;
   }
 
-  const book = data.data?.[0];
+  const book =
+    data.data?.[0];
 
   if (!book) {
     return;
@@ -328,7 +365,7 @@ function updateOKX(data) {
 }
 
 // ============================================================
-// CONNECT OKX
+// OKX CONNECTION
 // ============================================================
 
 function connectOKX() {
@@ -364,22 +401,28 @@ function connectOKX() {
     try {
       stats.okxMessages++;
 
-      const text = raw.toString();
+      const text =
+        raw.toString();
 
       if (text === "ping") {
         ws.send("pong");
         return;
       }
 
-      const data = JSON.parse(text);
+      const data =
+        JSON.parse(text);
 
-      if (data.event === "subscribe") {
+      if (
+        data.event === "subscribe"
+      ) {
         return;
       }
 
-      if (data.event === "error") {
+      if (
+        data.event === "error"
+      ) {
         log(
-          `OKX subscription error ${data.code}: ${data.msg}`
+          `OKX error ${data.code}: ${data.msg}`
         );
 
         return;
@@ -415,13 +458,15 @@ function connectOKX() {
 }
 
 // ============================================================
-// CALCOLO ARBITRAGGIO
+// ARBITRAGGIO
 // ============================================================
 
 function checkArbitrage(symbol) {
-  const cb = books[symbol].coinbase;
+  const cb =
+    books[symbol].coinbase;
 
-  const okx = books[symbol].okx;
+  const okx =
+    books[symbol].okx;
 
   if (
     !cb.bid ||
@@ -432,9 +477,9 @@ function checkArbitrage(symbol) {
     return;
   }
 
-  // ----------------------------------------------------------
-  // CONVERSIONE USD / USDT
-  // ----------------------------------------------------------
+  // ==========================================================
+  // CONVERSIONE
+  // ==========================================================
 
   const okxBidUSD =
     okx.bid /
@@ -444,99 +489,115 @@ function checkArbitrage(symbol) {
     okx.ask /
     CONFIG.usdToUsdt;
 
-  // ----------------------------------------------------------
-  // OPPORTUNITÀ 1
+  // ==========================================================
+  // DIREZIONE 1
   //
-  // COMPRA COINBASE
-  // VENDE OKX
-  // ----------------------------------------------------------
+  // BUY COINBASE
+  // SELL OKX
+  // ==========================================================
 
-  const gross1 =
-    ((okxBidUSD - cb.ask) /
-      cb.ask) *
-    100;
+  const grossCBtoOKX =
+    (
+      (okxBidUSD - cb.ask) /
+      cb.ask
+    ) * 100;
 
-  // ----------------------------------------------------------
-  // OPPORTUNITÀ 2
+  // Costi:
+  // acquisto Coinbase
+  // vendita OKX
+
+  const costsCBtoOKX =
+    CONFIG.coinbaseFeePercent +
+    CONFIG.okxFeePercent +
+    CONFIG.coinbaseSlippagePercent +
+    CONFIG.okxSlippagePercent;
+
+  const netCBtoOKX =
+    grossCBtoOKX -
+    costsCBtoOKX;
+
+  // ==========================================================
+  // DIREZIONE 2
   //
-  // COMPRA OKX
-  // VENDE COINBASE
-  // ----------------------------------------------------------
+  // BUY OKX
+  // SELL COINBASE
+  // ==========================================================
 
-  const gross2 =
-    ((cb.bid - okxAskUSD) /
-      okxAskUSD) *
-    100;
+  const grossOKXtoCB =
+    (
+      (cb.bid - okxAskUSD) /
+      okxAskUSD
+    ) * 100;
 
-  // ----------------------------------------------------------
-  // COSTI
-  // ----------------------------------------------------------
+  const costsOKXtoCB =
+    CONFIG.okxFeePercent +
+    CONFIG.coinbaseFeePercent +
+    CONFIG.okxSlippagePercent +
+    CONFIG.coinbaseSlippagePercent;
 
-  const totalFees =
-    CONFIG.feePercent * 2;
+  const netOKXtoCB =
+    grossOKXtoCB -
+    costsOKXtoCB;
 
-  const totalSlippage =
-    CONFIG.slippagePercent * 2;
+  // ==========================================================
+  // BREAK EVEN
+  // ==========================================================
 
-  const costs =
-    totalFees +
-    totalSlippage;
+  const breakEven =
+    costsCBtoOKX;
 
-  // ----------------------------------------------------------
-  // PROFITTO NETTO
-  // ----------------------------------------------------------
+  stats.opportunities++;
 
-  const net1 =
-    gross1 - costs;
+  // ==========================================================
+  // DISPLAY
+  // ==========================================================
 
-  const net2 =
-    gross2 - costs;
-
-  // ----------------------------------------------------------
-  // REPORT LIVE
-  // ----------------------------------------------------------
-
-  displayMarketStatus(
+  displayStatus(
     symbol,
     cb,
     okx,
-    gross1,
-    net1,
-    gross2,
-    net2
+    grossCBtoOKX,
+    netCBtoOKX,
+    grossOKXtoCB,
+    netOKXtoCB,
+    breakEven
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // PAPER TRADE
-  // ----------------------------------------------------------
+  // ==========================================================
 
   if (
-    net1 >=
+    netCBtoOKX >=
     CONFIG.minNetProfitPercent
   ) {
+    stats.profitableOpportunities++;
+
     executePaperTrade(
       symbol,
       "Coinbase",
       cb.ask,
       "OKX",
       okxBidUSD,
-      gross1,
-      net1
+      grossCBtoOKX,
+      netCBtoOKX
     );
   }
 
   if (
-    net2 >=
+    netOKXtoCB >=
     CONFIG.minNetProfitPercent
   ) {
+    stats.profitableOpportunities++;
+
     executePaperTrade(
       symbol,
       "OKX",
       okxAskUSD,
       "Coinbase",
       cb.bid,
-      gross2,
-      net2
+      grossOKXtoCB,
+      netOKXtoCB
     );
   }
 }
@@ -545,14 +606,15 @@ function checkArbitrage(symbol) {
 // MARKET STATUS
 // ============================================================
 
-function displayMarketStatus(
+function displayStatus(
   symbol,
   cb,
   okx,
   gross1,
   net1,
   gross2,
-  net2
+  net2,
+  breakEven
 ) {
   console.log("");
 
@@ -573,11 +635,15 @@ function displayMarketStatus(
   );
 
   console.log(
-    `CB -> OKX | Lordo: ${percent(gross1)} | Netto: ${percent(net1)}`
+    `CB -> OKX | Lordo: ${pct(gross1)} | Netto: ${pct(net1)}`
   );
 
   console.log(
-    `OKX -> CB | Lordo: ${percent(gross2)} | Netto: ${percent(net2)}`
+    `OKX -> CB | Lordo: ${pct(gross2)} | Netto: ${pct(net2)}`
+  );
+
+  console.log(
+    `Break-even: ${pct(breakEven)}`
   );
 
   console.log(
@@ -598,7 +664,7 @@ function displayMarketStatus(
 }
 
 // ============================================================
-// PAPER TRADE
+// ESECUZIONE PAPER TRADE
 // ============================================================
 
 function executePaperTrade(
@@ -613,9 +679,9 @@ function executePaperTrade(
   const currentTime =
     Date.now();
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // COOLDOWN
-  // ----------------------------------------------------------
+  // ==========================================================
 
   if (
     currentTime -
@@ -625,32 +691,31 @@ function executePaperTrade(
     return;
   }
 
-  // ----------------------------------------------------------
-  // CONTROLLO CAPITALE
-  // ----------------------------------------------------------
+  // ==========================================================
+  // CAPITALE
+  // ==========================================================
 
   if (
     paper.capital <
     CONFIG.tradeAmount
   ) {
     log(
-      "⚠️ Capitale PAPER insufficiente."
+      "⚠️ Capitale PAPER insufficiente"
     );
 
     return;
   }
 
-  // ----------------------------------------------------------
-  // CALCOLO PROFITTO
-  // ----------------------------------------------------------
+  // ==========================================================
+  // PROFITTO
+  // ==========================================================
 
   const profit =
     CONFIG.tradeAmount *
     (netPercent / 100);
 
-  // ----------------------------------------------------------
-  // AGGIORNAMENTO PORTAFOGLIO
-  // ----------------------------------------------------------
+  const previousCapital =
+    paper.capital;
 
   paper.capital += profit;
 
@@ -661,7 +726,7 @@ function executePaperTrade(
   paper.volume +=
     CONFIG.tradeAmount;
 
-  if (profit >= 0) {
+  if (profit > 0) {
     paper.winningTrades++;
   } else {
     paper.losingTrades++;
@@ -670,9 +735,9 @@ function executePaperTrade(
   paper.lastTradeTime[symbol] =
     currentTime;
 
-  // ----------------------------------------------------------
-  // REPORT OPERAZIONE
-  // ----------------------------------------------------------
+  // ==========================================================
+  // REPORT
+  // ==========================================================
 
   console.log("");
 
@@ -701,15 +766,17 @@ function executePaperTrade(
   );
 
   console.log(
-    `SPREAD LORDO: ${percent(grossPercent)}`
+    `SPREAD LORDO: ${pct(grossPercent)}`
   );
 
   console.log(
-    `PROFITTO NETTO: ${percent(netPercent)}`
+    `PROFITTO NETTO: ${pct(netPercent)}`
   );
 
   console.log(
-    `IMPORTO: ${money(CONFIG.tradeAmount)}`
+    `CAPITALE OPERAZIONE: ${money(
+      CONFIG.tradeAmount
+    )}`
   );
 
   console.log(
@@ -717,13 +784,13 @@ function executePaperTrade(
   );
 
   console.log(
-    `CAPITALE PRECEDENTE: ${money(
-      paper.capital - profit
+    `CAPITALE PRIMA: ${money(
+      previousCapital
     )}`
   );
 
   console.log(
-    `CAPITALE ATTUALE: ${money(
+    `CAPITALE DOPO: ${money(
       paper.capital
     )}`
   );
@@ -735,7 +802,7 @@ function executePaperTrade(
   );
 
   console.log(
-    `OPERAZIONI: ${paper.trades}`
+    `OPERAZIONI TOTALI: ${paper.trades}`
   );
 
   console.log(
@@ -750,16 +817,15 @@ function executePaperTrade(
 }
 
 // ============================================================
-// REPORT PERIODICO
+// REPORT PORTAFOGLIO
 // ============================================================
 
 function printPortfolio() {
   const roi =
-    paper.initialCapital > 0
-      ? (paper.totalProfit /
-          paper.initialCapital) *
-        100
-      : 0;
+    (
+      paper.totalProfit /
+      paper.initialCapital
+    ) * 100;
 
   console.log("");
 
@@ -768,7 +834,7 @@ function printPortfolio() {
   );
 
   console.log(
-    "💰 PAPER TRADING PORTFOLIO"
+    "💰 PAPER TRADING REPORT"
   );
 
   console.log(
@@ -794,7 +860,7 @@ function printPortfolio() {
   );
 
   console.log(
-    `ROI:               ${percent(roi)}`
+    `ROI:               ${pct(roi)}`
   );
 
   console.log(
@@ -810,13 +876,21 @@ function printPortfolio() {
   );
 
   console.log(
-    `Volume totale:     ${money(
+    `Volume:            ${money(
       paper.volume
     )}`
   );
 
   console.log(
-    `Coinbase msg:      ${stats.coinbaseMessages}`
+    `Opportunità viste: ${stats.opportunities}`
+  );
+
+  console.log(
+    `Opportunità profittevoli: ${stats.profitableOpportunities}`
+  );
+
+  console.log(
+    `Coinbase messaggi: ${stats.coinbaseMessages}`
   );
 
   console.log(
@@ -824,7 +898,7 @@ function printPortfolio() {
   );
 
   console.log(
-    `OKX msg:           ${stats.okxMessages}`
+    `OKX messaggi:      ${stats.okxMessages}`
   );
 
   console.log(
@@ -839,7 +913,7 @@ function printPortfolio() {
 }
 
 // ============================================================
-// AVVIO
+// START
 // ============================================================
 
 log(
@@ -865,17 +939,25 @@ log(
 );
 
 log(
-  `Importo per trade: ${money(
+  `Trade: ${money(
     CONFIG.tradeAmount
   )}`
 );
 
 log(
-  `Fee per lato: ${CONFIG.feePercent}%`
+  `Commissione Coinbase: ${CONFIG.coinbaseFeePercent}%`
 );
 
 log(
-  `Slippage per lato: ${CONFIG.slippagePercent}%`
+  `Commissione OKX: ${CONFIG.okxFeePercent}%`
+);
+
+log(
+  `Slippage Coinbase: ${CONFIG.coinbaseSlippagePercent}%`
+);
+
+log(
+  `Slippage OKX: ${CONFIG.okxSlippagePercent}%`
 );
 
 log(
@@ -883,19 +965,7 @@ log(
 );
 
 log(
-  "Ordini REALI: DISABILITATI"
-);
-
-log(
-  "Coppie: BTC / ETH"
-);
-
-log(
-  "Coinbase: BTC-USD / ETH-USD"
-);
-
-log(
-  "OKX: BTC-USDT / ETH-USDT"
+  "ORDINI REALI: DISABILITATI"
 );
 
 log(
@@ -906,7 +976,10 @@ connectCoinbase();
 
 connectOKX();
 
-// Report del portafoglio ogni 60 secondi
+// ============================================================
+// REPORT OGNI 60 SECONDI
+// ============================================================
+
 setInterval(() => {
   printPortfolio();
 }, 60000);
