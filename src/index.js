@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 
 // ============================================================
-// CRYPTO ARBITRAGE PAPER ENGINE v8
+// CRYPTO ARBITRAGE PAPER ENGINE v9
 // Coinbase <-> OKX | SOLO PAPER TRADING
 // ============================================================
 
@@ -34,14 +34,21 @@ const CONFIG = {
 
   opportunityCooldown: 10000,
   reconnectDelay: 5000,
+
   statusInterval: 30000,
   displayCooldown: 500,
 
   // Scanner continuo indipendente dal Live Tail.
-  // NON crea conferme artificiali.
   marketScanInterval: 250,
 
-  okxPingInterval: 20000
+  // Ping OKX.
+  okxPingInterval: 20000,
+
+  // Watchdog WebSocket.
+  // Se una connessione resta OPEN ma non riceve messaggi
+  // per 15 secondi, viene chiusa e riconnessa.
+  marketDataWatchdogInterval: 10000,
+  marketDataTimeout: 15000
 };
 
 
@@ -52,10 +59,13 @@ const CONFIG = {
 const paper = {
   initialCapital: CONFIG.initialCapital,
   capital: CONFIG.initialCapital,
+
   totalProfit: 0,
+
   trades: 0,
   winningTrades: 0,
   losingTrades: 0,
+
   volume: 0,
 
   lastTradeTime: {
@@ -101,6 +111,25 @@ const books = {
 
 
 // ============================================================
+// WATCHDOG CONNESSIONI
+// ============================================================
+
+const connectionState = {
+  coinbase: {
+    ws: null,
+    lastMessage: 0,
+    reconnecting: false
+  },
+
+  okx: {
+    ws: null,
+    lastMessage: 0,
+    reconnecting: false
+  }
+};
+
+
+// ============================================================
 // CONFERME
 // ============================================================
 
@@ -108,6 +137,7 @@ const confirmations = {
   BTC: {
     cbToOkx: 0,
     okxToCb: 0,
+
     lastCbToOkx: 0,
     lastOkxToCb: 0
   },
@@ -115,6 +145,7 @@ const confirmations = {
   ETH: {
     cbToOkx: 0,
     okxToCb: 0,
+
     lastCbToOkx: 0,
     lastOkxToCb: 0
   }
@@ -603,7 +634,6 @@ function updateConfirmation(
 
       confirmation.okxToCb = 0;
       confirmation.lastOkxToCb = 0;
-
     }
 
     return;
@@ -982,15 +1012,6 @@ function executePaperTrade(
 
 // ============================================================
 // MOTORE ARBITRAGGIO
-//
-// allowConfirmation = true
-// solamente quando arrivano nuovi prezzi.
-//
-// allowConfirmation = false
-// nello scanner continuo.
-//
-// In questo modo lo scanner mantiene il motore attivo ma
-// non crea conferme artificiali usando gli stessi prezzi.
 // ============================================================
 
 function checkArbitrage(
@@ -1078,8 +1099,7 @@ function checkArbitrage(
 
   // ----------------------------------------------------------
   // CONFERME
-  //
-  // SOLO nuovi aggiornamenti di mercato.
+  // SOLO NUOVI AGGIORNAMENTI REALI
   // ----------------------------------------------------------
 
   if (
@@ -1288,8 +1308,10 @@ function updateCoinbase(data) {
 
         stats.coinbaseUpdates++;
 
-        // Nuovo prezzo reale:
-        // può aggiornare le conferme.
+
+        // Nuovo prezzo reale.
+        // Può aggiornare le conferme.
+
         checkArbitrage(
           symbol,
           true
@@ -1306,10 +1328,26 @@ function updateCoinbase(data) {
 
 function connectCoinbase() {
 
+  if (
+    connectionState.coinbase.ws &&
+    connectionState.coinbase.ws.readyState ===
+    WebSocket.OPEN
+  ) {
+    return;
+  }
+
+
   const ws =
     new WebSocket(
       "wss://advanced-trade-ws.coinbase.com"
     );
+
+
+  connectionState.coinbase.ws =
+    ws;
+
+  connectionState.coinbase.reconnecting =
+    false;
 
 
   ws.on(
@@ -1358,6 +1396,9 @@ function connectCoinbase() {
 
         stats.coinbaseMessages++;
 
+        connectionState.coinbase.lastMessage =
+          Date.now();
+
 
         const data =
           JSON.parse(
@@ -1384,6 +1425,27 @@ function connectCoinbase() {
     "close",
     () => {
 
+      if (
+        connectionState.coinbase.ws ===
+        ws
+      ) {
+
+        connectionState.coinbase.ws =
+          null;
+      }
+
+
+      if (
+        connectionState.coinbase.reconnecting
+      ) {
+        return;
+      }
+
+
+      connectionState.coinbase.reconnecting =
+        true;
+
+
       log(
         "🔴 Coinbase disconnesso."
       );
@@ -1394,7 +1456,14 @@ function connectCoinbase() {
 
 
       setTimeout(
-        connectCoinbase,
+        () => {
+
+          connectionState.coinbase.reconnecting =
+            false;
+
+          connectCoinbase();
+
+        },
         CONFIG.reconnectDelay
       );
     }
@@ -1441,7 +1510,6 @@ function updateOKX(data) {
       data.arg.instId
     );
 
-
   if (!symbol) {
     return;
   }
@@ -1449,7 +1517,6 @@ function updateOKX(data) {
 
   const book =
     data.data?.[0];
-
 
   if (!book) {
     return;
@@ -1529,8 +1596,10 @@ function updateOKX(data) {
 
     stats.okxUpdates++;
 
-    // Nuovo prezzo reale:
-    // può aggiornare le conferme.
+
+    // Nuovo prezzo reale.
+    // Può aggiornare le conferme.
+
     checkArbitrage(
       symbol,
       true
@@ -1545,10 +1614,26 @@ function updateOKX(data) {
 
 function connectOKX() {
 
+  if (
+    connectionState.okx.ws &&
+    connectionState.okx.ws.readyState ===
+    WebSocket.OPEN
+  ) {
+    return;
+  }
+
+
   const ws =
     new WebSocket(
       "wss://ws.okx.com:8443/ws/v5/public"
     );
+
+
+  connectionState.okx.ws =
+    ws;
+
+  connectionState.okx.reconnecting =
+    false;
 
 
   let pingTimer =
@@ -1618,6 +1703,9 @@ function connectOKX() {
       try {
 
         stats.okxMessages++;
+
+        connectionState.okx.lastMessage =
+          Date.now();
 
 
         const text =
@@ -1705,6 +1793,27 @@ function connectOKX() {
       }
 
 
+      if (
+        connectionState.okx.ws ===
+        ws
+      ) {
+
+        connectionState.okx.ws =
+          null;
+      }
+
+
+      if (
+        connectionState.okx.reconnecting
+      ) {
+        return;
+      }
+
+
+      connectionState.okx.reconnecting =
+        true;
+
+
       log(
         "🔴 OKX disconnesso."
       );
@@ -1715,7 +1824,14 @@ function connectOKX() {
 
 
       setTimeout(
-        connectOKX,
+        () => {
+
+          connectionState.okx.reconnecting =
+            false;
+
+          connectOKX();
+
+        },
         CONFIG.reconnectDelay
       );
     }
@@ -1763,6 +1879,7 @@ function printPortfolio() {
     "============================================================"
   );
 
+
   console.log(
     `Capitale iniziale: ${money(
       paper.initialCapital
@@ -1803,6 +1920,7 @@ function printPortfolio() {
     )}`
   );
 
+
   console.log(
     `Controlli mercato: ${stats.checks}`
   );
@@ -1816,6 +1934,7 @@ function printPortfolio() {
       stats.profitableOpportunities
     }`
   );
+
 
   console.log("");
 
@@ -1842,6 +1961,7 @@ function printPortfolio() {
       stats.okxUpdates
     }`
   );
+
 
   console.log("");
 
@@ -1893,6 +2013,15 @@ function printPortfolio() {
     } ms`
   );
 
+  console.log(
+    `Watchdog dati mercato: ogni ${
+      CONFIG.marketDataWatchdogInterval
+    } ms | timeout ${
+      CONFIG.marketDataTimeout
+    } ms`
+  );
+
+
   console.log("");
 
   console.log(
@@ -1908,6 +2037,7 @@ function printPortfolio() {
         .toFixed(4)
     }%`
   );
+
 
   console.log("");
 
@@ -1930,7 +2060,7 @@ log(
 );
 
 log(
-  "🚀 CRYPTO ARBITRAGE PAPER ENGINE v8"
+  "🚀 CRYPTO ARBITRAGE PAPER ENGINE v9"
 );
 
 log(
@@ -2016,6 +2146,14 @@ log(
 );
 
 log(
+  `Watchdog dati mercato: ogni ${
+    CONFIG.marketDataWatchdogInterval
+  } ms | timeout ${
+    CONFIG.marketDataTimeout
+  } ms`
+);
+
+log(
   "🔒 ORDINI REALI: DISABILITATI"
 );
 
@@ -2046,15 +2184,11 @@ setInterval(
 // ============================================================
 // MARKET SCANNER CONTINUO
 //
-// Questo loop gira indipendentemente dalla visualizzazione
-// dei log.
+// Gira indipendentemente dal Live Tail.
 //
 // NON incrementa le conferme.
 // NON esegue trade da solo.
-// Valuta solamente il mercato usando prezzi freschi.
-//
-// Le conferme restano affidate esclusivamente ai nuovi
-// aggiornamenti ricevuti dai WebSocket.
+// Valuta continuamente il mercato.
 // ============================================================
 
 setInterval(
@@ -2072,6 +2206,91 @@ setInterval(
 
   },
   CONFIG.marketScanInterval
+);
+
+
+// ============================================================
+// WATCHDOG MARKET DATA
+//
+// Indipendente dal Live Tail.
+// Se un WebSocket resta OPEN ma non riceve messaggi per
+// il timeout configurato, viene chiuso e riconnesso.
+// ============================================================
+
+setInterval(
+  () => {
+
+    const currentTime =
+      Date.now();
+
+
+    // --------------------------------------------------------
+    // COINBASE
+    // --------------------------------------------------------
+
+    if (
+      connectionState.coinbase.ws &&
+      connectionState.coinbase.ws.readyState ===
+      WebSocket.OPEN &&
+      connectionState.coinbase.lastMessage > 0 &&
+      currentTime -
+      connectionState.coinbase.lastMessage >
+      CONFIG.marketDataTimeout
+    ) {
+
+      log(
+        "⚠️ Coinbase silenzioso: riconnessione watchdog."
+      );
+
+
+      try {
+
+        connectionState.coinbase.ws.close();
+
+      } catch (error) {
+
+        log(
+          "⚠️ Errore chiusura Coinbase watchdog: " +
+          error.message
+        );
+      }
+    }
+
+
+    // --------------------------------------------------------
+    // OKX
+    // --------------------------------------------------------
+
+    if (
+      connectionState.okx.ws &&
+      connectionState.okx.ws.readyState ===
+      WebSocket.OPEN &&
+      connectionState.okx.lastMessage > 0 &&
+      currentTime -
+      connectionState.okx.lastMessage >
+      CONFIG.marketDataTimeout
+    ) {
+
+      log(
+        "⚠️ OKX silenzioso: riconnessione watchdog."
+      );
+
+
+      try {
+
+        connectionState.okx.ws.close();
+
+      } catch (error) {
+
+        log(
+          "⚠️ Errore chiusura OKX watchdog: " +
+          error.message
+        );
+      }
+    }
+
+  },
+  CONFIG.marketDataWatchdogInterval
 );
 
 
