@@ -8,10 +8,6 @@ const WebSocket = require("ws");
 
 const CONFIG = {
 
-  // ==========================================================
-  // COPPIE
-  // ==========================================================
-
   pairs: {
     BTC: {
       coinbase: "BTC-USD",
@@ -24,64 +20,30 @@ const CONFIG = {
     }
   },
 
-  // ==========================================================
-  // PAPER TRADING
-  // ==========================================================
-
   initialCapital: 1000,
 
-  // Percentuale capitale utilizzata per ogni trade
   tradePercentOfCapital: 20,
 
-  // Profitto NETTO minimo richiesto
   minNetProfitPercent: 0.10,
 
-  // Conferme consecutive necessarie
   requiredConfirmations: 3,
 
-  // Intervallo minimo tra conferme
   confirmationInterval: 1000,
-
-  // ==========================================================
-  // COMMISSIONI
-  // ==========================================================
 
   coinbaseFeePercent: 0.60,
   okxFeePercent: 0.10,
 
-  // ==========================================================
-  // SLIPPAGE SIMULATO
-  // ==========================================================
-
   coinbaseSlippagePercent: 0.05,
   okxSlippagePercent: 0.05,
 
-  // ==========================================================
-  // USD / USDT
-  // ==========================================================
-
-  // 1 USD = 1 USDT nel PAPER TRADING
   usdToUsdt: 1.0,
-
-  // ==========================================================
-  // SICUREZZA
-  // ==========================================================
 
   paperTrading: true,
   realOrdersEnabled: false,
 
-  // ==========================================================
-  // QUALITÀ PREZZI
-  // ==========================================================
-
   maxPriceAge: 2000,
 
-  // Massima differenza temporale tra i prezzi
   maxPriceDesync: 500,
-
-  // ==========================================================
-  // TIMING
-  // ==========================================================
 
   opportunityCooldown: 10000,
 
@@ -364,8 +326,6 @@ function pricesFresh(symbol) {
 
   }
 
-
-  // Evita confronti tra prezzi troppo distanti temporalmente
 
   const desync =
     Math.abs(
@@ -670,10 +630,6 @@ function updateOKX(data) {
   let changed = false;
 
 
-  // ==========================================================
-  // BID
-  // ==========================================================
-
   if (
     Array.isArray(book.bids) &&
     book.bids.length > 0
@@ -697,10 +653,6 @@ function updateOKX(data) {
 
   }
 
-
-  // ==========================================================
-  // ASK
-  // ==========================================================
 
   if (
     Array.isArray(book.asks) &&
@@ -933,13 +885,6 @@ function connectOKX() {
 // CALCOLO ARBITRAGGIO
 // ============================================================
 
-
-// ============================================================
-// DIREZIONE 1
-// BUY Coinbase
-// SELL OKX
-// ============================================================
-
 function calculateCBtoOKX(cb, okx) {
 
   const okxBidUSD =
@@ -947,7 +892,6 @@ function calculateCBtoOKX(cb, okx) {
     CONFIG.usdToUsdt;
 
 
-  // Prezzo effettivo di acquisto
   const effectiveBuy =
     cb.ask *
     (
@@ -957,7 +901,6 @@ function calculateCBtoOKX(cb, okx) {
     );
 
 
-  // Costo totale acquisto
   const totalBuy =
     effectiveBuy *
     (
@@ -967,7 +910,6 @@ function calculateCBtoOKX(cb, okx) {
     );
 
 
-  // Prezzo effettivo vendita
   const effectiveSell =
     okxBidUSD *
     (
@@ -977,7 +919,6 @@ function calculateCBtoOKX(cb, okx) {
     );
 
 
-  // Ricavo netto vendita
   const totalSell =
     effectiveSell *
     (
@@ -987,7 +928,6 @@ function calculateCBtoOKX(cb, okx) {
     );
 
 
-  // Spread lordo
   const gross =
     (
       (
@@ -999,7 +939,6 @@ function calculateCBtoOKX(cb, okx) {
     100;
 
 
-  // Profitto netto
   const net =
     (
       (
@@ -1041,7 +980,6 @@ function calculateOKXtoCB(cb, okx) {
     CONFIG.usdToUsdt;
 
 
-  // Prezzo effettivo acquisto
   const effectiveBuy =
     okxAskUSD *
     (
@@ -1051,7 +989,6 @@ function calculateOKXtoCB(cb, okx) {
     );
 
 
-  // Costo totale acquisto
   const totalBuy =
     effectiveBuy *
     (
@@ -1061,7 +998,6 @@ function calculateOKXtoCB(cb, okx) {
     );
 
 
-  // Prezzo effettivo vendita
   const effectiveSell =
     cb.bid *
     (
@@ -1071,7 +1007,6 @@ function calculateOKXtoCB(cb, okx) {
     );
 
 
-  // Ricavo netto vendita
   const totalSell =
     effectiveSell *
     (
@@ -1081,7 +1016,6 @@ function calculateOKXtoCB(cb, okx) {
     );
 
 
-  // Spread lordo
   const gross =
     (
       (
@@ -1093,7 +1027,6 @@ function calculateOKXtoCB(cb, okx) {
     100;
 
 
-  // Profitto netto
   const net =
     (
       (
@@ -1165,8 +1098,6 @@ function calculateBreakEvenBuyCoinbaseSellOKX() {
 }
 
 
-// ============================================================
-
 function calculateBreakEvenBuyOKXSellCoinbase() {
 
   const buyFactor =
@@ -1224,10 +1155,6 @@ function updateConfirmation(
     Date.now();
 
 
-  // ----------------------------------------------------------
-  // NON PROFITTEVOLE
-  // ----------------------------------------------------------
-
   if (!profitable) {
 
     if (
@@ -1255,10 +1182,6 @@ function updateConfirmation(
   }
 
 
-  // ----------------------------------------------------------
-  // COINBASE -> OKX
-  // ----------------------------------------------------------
-
   if (
     direction ===
     "CB_OKX"
@@ -1282,10 +1205,6 @@ function updateConfirmation(
 
   }
 
-
-  // ----------------------------------------------------------
-  // OKX -> COINBASE
-  // ----------------------------------------------------------
 
   else {
 
@@ -1341,10 +1260,6 @@ function checkArbitrage(symbol) {
     books[symbol].okx;
 
 
-  // ==========================================================
-  // CALCOLI
-  // ==========================================================
-
   const result1 =
     calculateCBtoOKX(
       cb,
@@ -1370,10 +1285,6 @@ function checkArbitrage(symbol) {
   stats.opportunities++;
 
 
-  // ==========================================================
-  // PROFITTO REALE SIMULATO
-  // ==========================================================
-
   const profitable1 =
     result1.net >=
     CONFIG.minNetProfitPercent;
@@ -1383,10 +1294,6 @@ function checkArbitrage(symbol) {
     result2.net >=
     CONFIG.minNetProfitPercent;
 
-
-  // ==========================================================
-  // CONFERME
-  // ==========================================================
 
   updateConfirmation(
     symbol,
@@ -1402,10 +1309,6 @@ function checkArbitrage(symbol) {
   );
 
 
-  // ==========================================================
-  // DISPLAY
-  // ==========================================================
-
   displayStatus(
     symbol,
     cb,
@@ -1416,10 +1319,6 @@ function checkArbitrage(symbol) {
     breakEven2
   );
 
-
-  // ==========================================================
-  // PAPER TRADE 1
-  // ==========================================================
 
   if (
     profitable1 &&
@@ -1447,10 +1346,6 @@ function checkArbitrage(symbol) {
 
   }
 
-
-  // ==========================================================
-  // PAPER TRADE 2
-  // ==========================================================
 
   if (
     profitable2 &&
@@ -1523,7 +1418,21 @@ function displayStatus(
 
 
   console.log(
+    `Manca alla redditività CB -> OKX: ${pct(
+      Math.max(0, breakEven1 - result1.gross)
+    )}`
+  );
+
+
+  console.log(
     `OKX -> CB | Lordo: ${pct(result2.gross)} | Netto: ${pct(result2.net)}`
+  );
+
+
+  console.log(
+    `Manca alla redditività OKX -> CB: ${pct(
+      Math.max(0, breakEven2 - result2.gross)
+    )}`
   );
 
 
@@ -1587,10 +1496,6 @@ function executePaperTrade(
   netPercent
 ) {
 
-  // ==========================================================
-  // SICUREZZA
-  // ==========================================================
-
   if (!CONFIG.paperTrading) {
 
     return;
@@ -1609,10 +1514,6 @@ function executePaperTrade(
   }
 
 
-  // ==========================================================
-  // SICUREZZA EXTRA
-  // ==========================================================
-
   if (
     !Number.isFinite(netPercent) ||
     netPercent <
@@ -1628,10 +1529,6 @@ function executePaperTrade(
     Date.now();
 
 
-  // ==========================================================
-  // COOLDOWN
-  // ==========================================================
-
   if (
     currentTime -
     paper.lastTradeTime[symbol] <
@@ -1642,10 +1539,6 @@ function executePaperTrade(
 
   }
 
-
-  // ==========================================================
-  // CAPITALE OPERAZIONE
-  // ==========================================================
 
   const tradeAmount =
     paper.capital *
@@ -1669,10 +1562,6 @@ function executePaperTrade(
   }
 
 
-  // ==========================================================
-  // PROFITTO
-  // ==========================================================
-
   const profit =
     tradeAmount *
     (
@@ -1681,7 +1570,6 @@ function executePaperTrade(
     );
 
 
-  // Ulteriore protezione
   if (profit <= 0) {
 
     return;
@@ -1744,10 +1632,6 @@ function executePaperTrade(
 
   };
 
-
-  // ==========================================================
-  // REPORT
-  // ==========================================================
 
   console.log("");
 
