@@ -2,15 +2,25 @@ const WebSocket = require("ws");
 
 const CONFIG = {
   pairs: {
-    BTC: { coinbase: "BTC-USD", okx: "BTC-USDT" },
-    ETH: { coinbase: "ETH-USD", okx: "ETH-USDT" }
+    BTC: {
+      coinbase: "BTC-USD",
+      okx: "BTC-USDT"
+    },
+
+    ETH: {
+      coinbase: "ETH-USD",
+      okx: "ETH-USDT"
+    }
   },
 
   initialCapital: 1000,
+
   tradePercentOfCapital: 20,
+
   minNetProfitPercent: 0.10,
 
   requiredConfirmations: 3,
+
   confirmationInterval: 1000,
 
   coinbaseFeePercent: 0.60,
@@ -22,13 +32,17 @@ const CONFIG = {
   usdToUsdt: 1.0,
 
   paperTrading: true,
+
   realOrdersEnabled: false,
 
   maxPriceAge: 2000,
+
   maxPriceDesync: 500,
 
   opportunityCooldown: 10000,
+
   reconnectDelay: 5000,
+
   statusInterval: 30000,
 
   displayCooldown: 1000,
@@ -38,23 +52,30 @@ const CONFIG = {
   okxPingInterval: 20000,
 
   marketDataWatchdogInterval: 10000,
+
   marketDataTimeout: 15000,
 
-  selfTestEnabled: true
+  selfTestEnabled: true,
+
+  telegramOpportunityCooldown: 30000
 };
 
 
-// ============================================================
-// PAPER PORTFOLIO
-// ============================================================
+/* ============================================================
+   PAPER ACCOUNT
+============================================================ */
 
 const paper = {
   initialCapital: CONFIG.initialCapital,
+
   capital: CONFIG.initialCapital,
+
   totalProfit: 0,
 
   trades: 0,
+
   winningTrades: 0,
+
   losingTrades: 0,
 
   volume: 0,
@@ -66,9 +87,9 @@ const paper = {
 };
 
 
-// ============================================================
-// MARKET BOOKS
-// ============================================================
+/* ============================================================
+   MARKET BOOKS
+============================================================ */
 
 const books = {
   BTC: {
@@ -101,9 +122,9 @@ const books = {
 };
 
 
-// ============================================================
-// CONNECTION STATE
-// ============================================================
+/* ============================================================
+   CONNECTION STATE
+============================================================ */
 
 const connectionState = {
   coinbase: {
@@ -120,14 +141,15 @@ const connectionState = {
 };
 
 
-// ============================================================
-// CONFIRMATIONS
-// ============================================================
+/* ============================================================
+   CONFIRMATIONS
+============================================================ */
 
 const confirmations = {
   BTC: {
     cbToOkx: 0,
     okxToCb: 0,
+
     lastCbToOkx: 0,
     lastOkxToCb: 0
   },
@@ -135,26 +157,31 @@ const confirmations = {
   ETH: {
     cbToOkx: 0,
     okxToCb: 0,
+
     lastCbToOkx: 0,
     lastOkxToCb: 0
   }
 };
 
 
-// ============================================================
-// STATISTICS
-// ============================================================
+/* ============================================================
+   STATISTICS
+============================================================ */
 
 const stats = {
   coinbaseMessages: 0,
+
   coinbaseUpdates: 0,
 
   okxMessages: 0,
+
   okxUpdates: 0,
 
   checks: 0,
-  opportunities: 0,
-  profitableOpportunities: 0,
+
+  confirmedOpportunities: 0,
+
+  executedOpportunities: 0,
 
   lastDisplayTime: {
     BTC: 0,
@@ -163,25 +190,19 @@ const stats = {
 
   lastOpportunity: null,
 
-  telegramOpportunityAlerts: {
+  lastTelegramOpportunity: {
     BTC_CB_OKX: 0,
     BTC_OKX_CB: 0,
-    ETH_CB_OKX: 0,
-    ETH_OKX_CB: 0
-  },
 
-  telegramConfirmedAlerts: {
-    BTC_CB_OKX: 0,
-    BTC_OKX_CB: 0,
     ETH_CB_OKX: 0,
     ETH_OKX_CB: 0
   }
 };
 
 
-// ============================================================
-// UTILITY
-// ============================================================
+/* ============================================================
+   HELPERS
+============================================================ */
 
 function now() {
   return new Date().toLocaleTimeString("it-IT");
@@ -204,16 +225,13 @@ function pct(value) {
 
 
 function validNumber(value) {
-  return (
-    Number.isFinite(value) &&
-    value > 0
-  );
+  return Number.isFinite(value) && value > 0;
 }
 
 
-// ============================================================
-// TELEGRAM NOTIFICATIONS
-// ============================================================
+/* ============================================================
+   TELEGRAM
+============================================================ */
 
 const TELEGRAM_CHAT_ID = "1254274653";
 
@@ -238,19 +256,15 @@ async function sendTelegram(message) {
           method: "POST",
 
           headers: {
-            "Content-Type":
-              "application/json"
+            "Content-Type": "application/json"
           },
 
           body: JSON.stringify({
-            chat_id:
-              TELEGRAM_CHAT_ID,
+            chat_id: TELEGRAM_CHAT_ID,
 
-            text:
-              message,
+            text: message,
 
-            disable_web_page_preview:
-              true
+            disable_web_page_preview: true
           })
         }
       );
@@ -273,7 +287,6 @@ async function sendTelegram(message) {
     return true;
 
   } catch (error) {
-
     log(
       "❌ Telegram error: " +
       error.message
@@ -285,287 +298,62 @@ async function sendTelegram(message) {
 
 
 function notifyTelegram(message) {
-
   sendTelegram(message)
     .catch(error => {
-
       log(
         "❌ Telegram promise error: " +
         error.message
       );
-
     });
-
 }
 
 
-// ============================================================
-// TELEGRAM OPPORTUNITY ALERT
-// ============================================================
+/* ============================================================
+   PAIR LOOKUP
+============================================================ */
 
-function opportunityAlertKey(
-  symbol,
-  direction
-) {
-  return `${symbol}_${direction}`;
-}
-
-
-function notifyProfitableOpportunity(
-  symbol,
-  direction,
-  buyExchange,
-  buyPrice,
-  sellExchange,
-  sellPrice,
-  grossPercent,
-  netPercent,
-  confirmationCount
-) {
-
-  if (
-    !Number.isFinite(netPercent) ||
-    netPercent <
-    CONFIG.minNetProfitPercent
-  ) {
-    return;
-  }
-
-
-  const key =
-    opportunityAlertKey(
-      symbol,
-      direction
-    );
-
-
-  const currentTime =
-    Date.now();
-
-
-  const lastAlert =
-    stats.telegramOpportunityAlerts[key] ||
-    0;
-
-
-  if (
-    currentTime -
-    lastAlert <
-    CONFIG.opportunityCooldown
-  ) {
-    return;
-  }
-
-
-  stats.telegramOpportunityAlerts[key] =
-    currentTime;
-
-
-  const tradeAmount =
-    paper.capital *
-    (
-      CONFIG.tradePercentOfCapital /
-      100
-    );
-
-
-  const estimatedProfit =
-    tradeAmount *
-    (
-      netPercent /
-      100
-    );
-
-
-  notifyTelegram(
-    `🚨 OPPORTUNITÀ ARBITRAGGIO\n\n` +
-
-    `Pair: ${symbol}\n` +
-
-    `BUY: ${buyExchange} @ ${buyPrice.toFixed(2)}\n` +
-
-    `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}\n` +
-
-    `Spread lordo: ${pct(grossPercent)}\n` +
-
-    `Profitto netto: ${pct(netPercent)}\n` +
-
-    `Conferma: ${confirmationCount}/${CONFIG.requiredConfirmations}\n` +
-
-    `Capitale operazione: ${money(tradeAmount)}\n` +
-
-    `Profitto stimato: ${money(estimatedProfit)}\n\n` +
-
-    `⚠️ PAPER TRADING - nessun ordine reale`
-  );
-}
-
-
-// ============================================================
-// TELEGRAM CONFIRMED OPPORTUNITY
-// ============================================================
-
-function notifyConfirmedOpportunity(
-  symbol,
-  direction,
-  buyExchange,
-  buyPrice,
-  sellExchange,
-  sellPrice,
-  grossPercent,
-  netPercent
-) {
-
-  if (
-    !Number.isFinite(netPercent) ||
-    netPercent <
-    CONFIG.minNetProfitPercent
-  ) {
-    return;
-  }
-
-
-  const key =
-    opportunityAlertKey(
-      symbol,
-      direction
-    );
-
-
-  const currentTime =
-    Date.now();
-
-
-  const lastAlert =
-    stats.telegramConfirmedAlerts[key] ||
-    0;
-
-
-  if (
-    currentTime -
-    lastAlert <
-    CONFIG.opportunityCooldown
-  ) {
-    return;
-  }
-
-
-  stats.telegramConfirmedAlerts[key] =
-    currentTime;
-
-
-  const tradeAmount =
-    paper.capital *
-    (
-      CONFIG.tradePercentOfCapital /
-      100
-    );
-
-
-  const estimatedProfit =
-    tradeAmount *
-    (
-      netPercent /
-      100
-    );
-
-
-  notifyTelegram(
-    `🚨🚨 SEGNALE ARBITRAGGIO CONFERMATO 🚨🚨\n\n` +
-
-    `Pair: ${symbol}\n` +
-
-    `BUY: ${buyExchange} @ ${buyPrice.toFixed(2)}\n` +
-
-    `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}\n` +
-
-    `Spread lordo: ${pct(grossPercent)}\n` +
-
-    `Profitto netto stimato: ${pct(netPercent)}\n` +
-
-    `Conferme: ${CONFIG.requiredConfirmations}/${CONFIG.requiredConfirmations}\n` +
-
-    `Capitale operazione: ${money(tradeAmount)}\n` +
-
-    `Profitto stimato: ${money(estimatedProfit)}\n\n` +
-
-    `🟢 Segnale confermato dal motore\n` +
-
-    `🔒 PAPER TRADING - ordini reali DISABILITATI`
-  );
-}
-
-
-// ============================================================
-// PAIR LOOKUP
-// ============================================================
-
-function getPairByCoinbaseProduct(
-  productId
-) {
-
+function getPairByCoinbaseProduct(productId) {
   for (
-    const [
-      symbol,
-      pair
-    ]
-    of Object.entries(
-      CONFIG.pairs
-    )
+    const [symbol, pair]
+    of Object.entries(CONFIG.pairs)
   ) {
-
     if (
-      pair.coinbase ===
-      productId
+      pair.coinbase === productId
     ) {
       return symbol;
     }
-
   }
 
   return null;
 }
 
 
-function getPairByOKXProduct(
-  instId
-) {
-
+function getPairByOKXProduct(instId) {
   for (
-    const [
-      symbol,
-      pair
-    ]
-    of Object.entries(
-      CONFIG.pairs
-    )
+    const [symbol, pair]
+    of Object.entries(CONFIG.pairs)
   ) {
-
     if (
-      pair.okx ===
-      instId
+      pair.okx === instId
     ) {
       return symbol;
     }
-
   }
 
   return null;
 }
 
 
-// ============================================================
-// PREZZI PRONTI
-// ============================================================
+/* ============================================================
+   PRICE VALIDATION
+============================================================ */
 
 function pricesReady(symbol) {
-
   const cb =
     books[symbol].coinbase;
 
   const okx =
     books[symbol].okx;
-
 
   return (
     validNumber(cb.bid) &&
@@ -576,32 +364,23 @@ function pricesReady(symbol) {
 }
 
 
-// ============================================================
-// PREZZI FRESCHI
-// ============================================================
-
 function pricesFresh(symbol) {
-
   const cb =
     books[symbol].coinbase;
 
   const okx =
     books[symbol].okx;
 
-
   const currentTime =
     Date.now();
-
 
   const cbAge =
     currentTime -
     cb.timestamp;
 
-
   const okxAge =
     currentTime -
     okx.timestamp;
-
 
   if (
     cbAge >
@@ -610,7 +389,6 @@ function pricesFresh(symbol) {
     return false;
   }
 
-
   if (
     okxAge >
     CONFIG.maxPriceAge
@@ -618,13 +396,11 @@ function pricesFresh(symbol) {
     return false;
   }
 
-
   const desync =
     Math.abs(
       cb.timestamp -
       okx.timestamp
     );
-
 
   if (
     desync >
@@ -633,25 +409,18 @@ function pricesFresh(symbol) {
     return false;
   }
 
-
   return true;
 }
 
 
-// ============================================================
-// COINBASE -> OKX
-// BUY COINBASE / SELL OKX
-// ============================================================
+/* ============================================================
+   ARBITRAGE CALCULATIONS
+============================================================ */
 
-function calculateCBtoOKX(
-  cb,
-  okx
-) {
-
+function calculateCBtoOKX(cb, okx) {
   const okxBidUSD =
     okx.bid /
     CONFIG.usdToUsdt;
-
 
   const effectiveBuy =
     cb.ask *
@@ -661,7 +430,6 @@ function calculateCBtoOKX(
       100
     );
 
-
   const totalBuy =
     effectiveBuy *
     (
@@ -669,7 +437,6 @@ function calculateCBtoOKX(
       CONFIG.coinbaseFeePercent /
       100
     );
-
 
   const effectiveSell =
     okxBidUSD *
@@ -679,7 +446,6 @@ function calculateCBtoOKX(
       100
     );
 
-
   const totalSell =
     effectiveSell *
     (
@@ -687,7 +453,6 @@ function calculateCBtoOKX(
       CONFIG.okxFeePercent /
       100
     );
-
 
   const gross =
     (
@@ -699,7 +464,6 @@ function calculateCBtoOKX(
     ) *
     100;
 
-
   const net =
     (
       (
@@ -710,32 +474,21 @@ function calculateCBtoOKX(
     ) *
     100;
 
-
   return {
     gross,
     net,
-    buyPrice:
-      totalBuy,
-    sellPrice:
-      totalSell
+
+    buyPrice: totalBuy,
+
+    sellPrice: totalSell
   };
 }
 
 
-// ============================================================
-// OKX -> COINBASE
-// BUY OKX / SELL COINBASE
-// ============================================================
-
-function calculateOKXtoCB(
-  cb,
-  okx
-) {
-
+function calculateOKXtoCB(cb, okx) {
   const okxAskUSD =
     okx.ask /
     CONFIG.usdToUsdt;
-
 
   const effectiveBuy =
     okxAskUSD *
@@ -745,7 +498,6 @@ function calculateOKXtoCB(
       100
     );
 
-
   const totalBuy =
     effectiveBuy *
     (
@@ -753,7 +505,6 @@ function calculateOKXtoCB(
       CONFIG.okxFeePercent /
       100
     );
-
 
   const effectiveSell =
     cb.bid *
@@ -763,7 +514,6 @@ function calculateOKXtoCB(
       100
     );
 
-
   const totalSell =
     effectiveSell *
     (
@@ -771,7 +521,6 @@ function calculateOKXtoCB(
       CONFIG.coinbaseFeePercent /
       100
     );
-
 
   const gross =
     (
@@ -783,7 +532,6 @@ function calculateOKXtoCB(
     ) *
     100;
 
-
   const net =
     (
       (
@@ -794,24 +542,22 @@ function calculateOKXtoCB(
     ) *
     100;
 
-
   return {
     gross,
     net,
-    buyPrice:
-      totalBuy,
-    sellPrice:
-      totalSell
+
+    buyPrice: totalBuy,
+
+    sellPrice: totalSell
   };
 }
 
 
-// ============================================================
-// BREAK EVEN
-// ============================================================
+/* ============================================================
+   BREAK EVEN
+============================================================ */
 
 function calculateBreakEvenBuyCoinbaseSellOKX() {
-
   const buyFactor =
     (
       1 +
@@ -824,7 +570,6 @@ function calculateBreakEvenBuyCoinbaseSellOKX() {
       100
     );
 
-
   const sellFactor =
     (
       1 -
@@ -836,7 +581,6 @@ function calculateBreakEvenBuyCoinbaseSellOKX() {
       CONFIG.okxFeePercent /
       100
     );
-
 
   return (
     (
@@ -849,7 +593,6 @@ function calculateBreakEvenBuyCoinbaseSellOKX() {
 
 
 function calculateBreakEvenBuyOKXSellCoinbase() {
-
   const buyFactor =
     (
       1 +
@@ -861,7 +604,6 @@ function calculateBreakEvenBuyOKXSellCoinbase() {
       CONFIG.okxFeePercent /
       100
     );
-
 
   const sellFactor =
     (
@@ -875,7 +617,6 @@ function calculateBreakEvenBuyOKXSellCoinbase() {
       100
     );
 
-
   return (
     (
       buyFactor /
@@ -886,17 +627,12 @@ function calculateBreakEvenBuyOKXSellCoinbase() {
 }
 
 
-// ============================================================
-// TARGET LORDO
-// ============================================================
-
 function targetGrossForNet(
   buyFee,
   buySlip,
   sellFee,
   sellSlip
 ) {
-
   const buyFactor =
     (
       1 +
@@ -909,7 +645,6 @@ function targetGrossForNet(
       100
     );
 
-
   const sellFactor =
     (
       1 -
@@ -921,7 +656,6 @@ function targetGrossForNet(
       sellFee /
       100
     );
-
 
   return (
     (
@@ -938,23 +672,20 @@ function targetGrossForNet(
 }
 
 
-// ============================================================
-// CONFERME
-// ============================================================
+/* ============================================================
+   CONFIRMATION ENGINE
+============================================================ */
 
 function updateConfirmation(
   symbol,
   direction,
   profitable
 ) {
-
   const confirmation =
     confirmations[symbol];
 
-
   const currentTime =
     Date.now();
-
 
   if (!profitable) {
 
@@ -962,22 +693,15 @@ function updateConfirmation(
       direction ===
       "CB_OKX"
     ) {
+      confirmation.cbToOkx = 0;
 
-      confirmation.cbToOkx =
-        0;
-
-      confirmation.lastCbToOkx =
-        0;
+      confirmation.lastCbToOkx = 0;
 
     } else {
+      confirmation.okxToCb = 0;
 
-      confirmation.okxToCb =
-        0;
-
-      confirmation.lastOkxToCb =
-        0;
+      confirmation.lastOkxToCb = 0;
     }
-
 
     return;
   }
@@ -989,8 +713,7 @@ function updateConfirmation(
   ) {
 
     if (
-      confirmation.lastCbToOkx ===
-      0 ||
+      confirmation.lastCbToOkx === 0 ||
       (
         currentTime -
         confirmation.lastCbToOkx
@@ -1004,14 +727,12 @@ function updateConfirmation(
         currentTime;
     }
 
-
     return;
   }
 
 
   if (
-    confirmation.lastOkxToCb ===
-    0 ||
+    confirmation.lastOkxToCb === 0 ||
     (
       currentTime -
       confirmation.lastOkxToCb
@@ -1027,126 +748,9 @@ function updateConfirmation(
 }
 
 
-// ============================================================
-// DISPLAY
-// ============================================================
-
-function displayStatus(
-  symbol,
-  cb,
-  okx,
-  result1,
-  result2,
-  target1,
-  target2
-) {
-
-  console.log("");
-
-  console.log(
-    "------------------------------------------------------------"
-  );
-
-
-  console.log(
-    `📊 ${symbol}`
-  );
-
-
-  console.log(
-    `Coinbase -> BID: ${cb.bid.toFixed(2)} | ASK: ${cb.ask.toFixed(2)}`
-  );
-
-
-  console.log(
-    `OKX      -> BID: ${okx.bid.toFixed(2)} | ASK: ${okx.ask.toFixed(2)}`
-  );
-
-
-  console.log(
-    `CB -> OKX | Lordo: ${pct(result1.gross)} | Netto: ${pct(result1.net)}`
-  );
-
-
-  console.log(
-    `Manca alla redditività CB -> OKX: ${pct(
-      Math.max(
-        0,
-        target1 -
-        result1.gross
-      )
-    )}`
-  );
-
-
-  console.log(
-    `OKX -> CB | Lordo: ${pct(result2.gross)} | Netto: ${pct(result2.net)}`
-  );
-
-
-  console.log(
-    `Manca alla redditività OKX -> CB: ${pct(
-      Math.max(
-        0,
-        target2 -
-        result2.gross
-      )
-    )}`
-  );
-
-
-  console.log(
-    `Break-even CB -> OKX: ${pct(
-      calculateBreakEvenBuyCoinbaseSellOKX()
-    )}`
-  );
-
-
-  console.log(
-    `Break-even OKX -> CB: ${pct(
-      calculateBreakEvenBuyOKXSellCoinbase()
-    )}`
-  );
-
-
-  console.log(
-    `Conferma CB -> OKX: ${
-      confirmations[symbol].cbToOkx
-    }/${CONFIG.requiredConfirmations}`
-  );
-
-
-  console.log(
-    `Conferma OKX -> CB: ${
-      confirmations[symbol].okxToCb
-    }/${CONFIG.requiredConfirmations}`
-  );
-
-
-  console.log(
-    `💰 Capitale PAPER: ${money(paper.capital)}`
-  );
-
-
-  console.log(
-    `💵 Profitto totale: ${money(paper.totalProfit)}`
-  );
-
-
-  console.log(
-    `📈 Operazioni: ${paper.trades}`
-  );
-
-
-  console.log(
-    "------------------------------------------------------------"
-  );
-}
-
-
-// ============================================================
-// PAPER TRADE
-// ============================================================
+/* ============================================================
+   PAPER TRADE
+============================================================ */
 
 function executePaperTrade(
   symbol,
@@ -1155,13 +759,14 @@ function executePaperTrade(
   sellExchange,
   sellPrice,
   grossPercent,
-  netPercent
+  netPercent,
+  sendTelegramNotification = true
 ) {
 
   if (
     !CONFIG.paperTrading
   ) {
-    return;
+    return false;
   }
 
 
@@ -1173,7 +778,7 @@ function executePaperTrade(
       "❌ BLOCCO SICUREZZA: ordini reali disabilitati."
     );
 
-    return;
+    return false;
   }
 
 
@@ -1182,7 +787,7 @@ function executePaperTrade(
     netPercent <
     CONFIG.minNetProfitPercent
   ) {
-    return;
+    return false;
   }
 
 
@@ -1195,7 +800,7 @@ function executePaperTrade(
     paper.lastTradeTime[symbol] <
     CONFIG.opportunityCooldown
   ) {
-    return;
+    return false;
   }
 
 
@@ -1209,15 +814,14 @@ function executePaperTrade(
 
   if (
     tradeAmount <= 0 ||
-    tradeAmount >
-    paper.capital
+    tradeAmount > paper.capital
   ) {
 
     log(
       "⚠️ Capitale PAPER insufficiente"
     );
 
-    return;
+    return false;
   }
 
 
@@ -1232,7 +836,7 @@ function executePaperTrade(
   if (
     profit <= 0
   ) {
-    return;
+    return false;
   }
 
 
@@ -1262,133 +866,329 @@ function executePaperTrade(
     currentTime;
 
 
+  stats.executedOpportunities++;
+
+
   stats.lastOpportunity = {
     symbol,
+
     buyExchange,
+
     sellExchange,
+
     grossPercent,
+
     netPercent,
+
     profit,
-    timestamp:
-      currentTime
+
+    timestamp: currentTime
   };
 
 
   console.log("");
 
-
   console.log(
     "============================================================"
   );
 
-
   console.log(
-    "🚨🚨🚨 PAPER TRADE ESEGUITO 🚨🚨🚨"
+    "🚨 PAPER TRADE ESEGUITO"
   );
-
 
   console.log(
     "============================================================"
   );
-
 
   console.log(
     `PAIR: ${symbol}`
   );
 
-
   console.log(
     `BUY:  ${buyExchange} @ ${buyPrice.toFixed(2)}`
   );
-
 
   console.log(
     `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}`
   );
 
-
   console.log(
     `SPREAD LORDO: ${pct(grossPercent)}`
   );
-
 
   console.log(
     `PROFITTO NETTO: ${pct(netPercent)}`
   );
 
-
   console.log(
     `CAPITALE OPERAZIONE: ${money(tradeAmount)}`
   );
-
 
   console.log(
     `PROFITTO: ${money(profit)}`
   );
 
-
   console.log(
     `CAPITALE PRIMA: ${money(previousCapital)}`
   );
-
 
   console.log(
     `CAPITALE DOPO: ${money(paper.capital)}`
   );
 
-
   console.log(
     `PROFITTO TOTALE: ${money(paper.totalProfit)}`
   );
-
 
   console.log(
     `OPERAZIONI TOTALI: ${paper.trades}`
   );
 
-
   console.log(
     "🔒 ORDINI REALI: DISABILITATI"
   );
-
 
   console.log(
     "============================================================"
   );
 
 
-  console.log("");
+  if (
+    sendTelegramNotification
+  ) {
+
+    notifyTelegram(
+      `🚨 PAPER TRADE ESEGUITO\n\n` +
+
+      `Pair: ${symbol}\n` +
+
+      `BUY: ${buyExchange} @ ${buyPrice.toFixed(2)}\n` +
+
+      `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}\n` +
+
+      `Spread lordo: ${pct(grossPercent)}\n` +
+
+      `Profitto netto: ${pct(netPercent)}\n` +
+
+      `Capitale operazione: ${money(tradeAmount)}\n` +
+
+      `Profitto: ${money(profit)}\n` +
+
+      `Capitale dopo: ${money(paper.capital)}\n` +
+
+      `Operazioni totali: ${paper.trades}\n` +
+
+      `Opportunità eseguite: ${stats.executedOpportunities}\n` +
+
+      `🔒 Ordini reali: DISABILITATI`
+    );
+  }
+
+
+  return true;
+}
+
+
+/* ============================================================
+   TELEGRAM OPPORTUNITY
+   SOLO DOPO 3 CONFERME
+============================================================ */
+
+function notifyProfitableOpportunity(
+  symbol,
+  direction,
+  result,
+  confirmationCount
+) {
+
+  if (
+    confirmationCount <
+    CONFIG.requiredConfirmations
+  ) {
+    return;
+  }
+
+
+  if (
+    !Number.isFinite(result.net) ||
+    result.net <
+    CONFIG.minNetProfitPercent
+  ) {
+    return;
+  }
+
+
+  const key =
+    `${symbol}_${direction}`;
+
+
+  const currentTime =
+    Date.now();
+
+
+  const lastSent =
+    stats.lastTelegramOpportunity[key] ||
+    0;
+
+
+  if (
+    currentTime -
+    lastSent <
+    CONFIG.telegramOpportunityCooldown
+  ) {
+    return;
+  }
+
+
+  stats.lastTelegramOpportunity[key] =
+    currentTime;
+
+
+  const buyExchange =
+    direction === "CB_OKX"
+      ? "Coinbase"
+      : "OKX";
+
+
+  const sellExchange =
+    direction === "CB_OKX"
+      ? "OKX"
+      : "Coinbase";
 
 
   notifyTelegram(
-    `🚨 PAPER TRADE ESEGUITO\n\n` +
+    `🟢 OPPORTUNITÀ CONFERMATA ${symbol}\n\n` +
 
-    `Pair: ${symbol}\n` +
+    `BUY: ${buyExchange} @ ${result.buyPrice.toFixed(2)}\n` +
 
-    `BUY: ${buyExchange} @ ${buyPrice.toFixed(2)}\n` +
+    `SELL: ${sellExchange} @ ${result.sellPrice.toFixed(2)}\n` +
 
-    `SELL: ${sellExchange} @ ${sellPrice.toFixed(2)}\n` +
+    `Spread lordo: ${pct(result.gross)}\n` +
 
-    `Spread lordo: ${pct(grossPercent)}\n` +
+    `Profitto netto stimato: ${pct(result.net)}\n` +
 
-    `Profitto netto: ${pct(netPercent)}\n` +
+    `Conferme: ${confirmationCount}/${CONFIG.requiredConfirmations}\n` +
 
-    `Capitale operazione: ${money(tradeAmount)}\n` +
+    `Soglia minima: ${pct(CONFIG.minNetProfitPercent)}\n\n` +
 
-    `Profitto: ${money(profit)}\n` +
+    `🟢 CONFERMATA\n` +
 
-    `Capitale dopo: ${money(paper.capital)}\n` +
-
-    `Operazioni totali: ${paper.trades}\n` +
+    `Modalità: PAPER TRADING\n` +
 
     `🔒 Ordini reali: DISABILITATI`
   );
 }
 
 
-// ============================================================
-// SELF TEST PAPER
-// ============================================================
+/* ============================================================
+   DISPLAY STATUS
+============================================================ */
+
+function displayStatus(
+  symbol,
+  cb,
+  okx,
+  result1,
+  result2,
+  target1,
+  target2
+) {
+
+  console.log("");
+
+  console.log(
+    "------------------------------------------------------------"
+  );
+
+  console.log(
+    `📊 ${symbol}`
+  );
+
+  console.log(
+    `Coinbase -> BID: ${cb.bid.toFixed(2)} | ASK: ${cb.ask.toFixed(2)}`
+  );
+
+  console.log(
+    `OKX      -> BID: ${okx.bid.toFixed(2)} | ASK: ${okx.ask.toFixed(2)}`
+  );
+
+  console.log(
+    `CB -> OKX | Lordo: ${pct(result1.gross)} | Netto: ${pct(result1.net)}`
+  );
+
+  console.log(
+    `Manca alla redditività CB -> OKX: ${pct(
+      Math.max(
+        0,
+        target1 -
+        result1.gross
+      )
+    )}`
+  );
+
+  console.log(
+    `OKX -> CB | Lordo: ${pct(result2.gross)} | Netto: ${pct(result2.net)}`
+  );
+
+  console.log(
+    `Manca alla redditività OKX -> CB: ${pct(
+      Math.max(
+        0,
+        target2 -
+        result2.gross
+      )
+    )}`
+  );
+
+  console.log(
+    `Break-even CB -> OKX: ${pct(
+      calculateBreakEvenBuyCoinbaseSellOKX()
+    )}`
+  );
+
+  console.log(
+    `Break-even OKX -> CB: ${pct(
+      calculateBreakEvenBuyOKXSellCoinbase()
+    )}`
+  );
+
+  console.log(
+    `Conferma CB -> OKX: ${
+      confirmations[symbol].cbToOkx
+    }/${CONFIG.requiredConfirmations}`
+  );
+
+  console.log(
+    `Conferma OKX -> CB: ${
+      confirmations[symbol].okxToCb
+    }/${CONFIG.requiredConfirmations}`
+  );
+
+  console.log(
+    `💰 Capitale PAPER: ${money(paper.capital)}`
+  );
+
+  console.log(
+    `💵 Profitto totale: ${money(paper.totalProfit)}`
+  );
+
+  console.log(
+    `📈 Operazioni eseguite: ${paper.trades}`
+  );
+
+  console.log(
+    `🎯 Opportunità confermate: ${stats.confirmedOpportunities}`
+  );
+
+  console.log(
+    "------------------------------------------------------------"
+  );
+}
+
+
+/* ============================================================
+   PAPER SELF TEST
+============================================================ */
 
 function runPaperSelfTest() {
 
@@ -1413,6 +1213,7 @@ function runPaperSelfTest() {
 
 
   const saved = {
+
     capital:
       paper.capital,
 
@@ -1430,6 +1231,9 @@ function runPaperSelfTest() {
 
     volume:
       paper.volume,
+
+    executedOpportunities:
+      stats.executedOpportunities,
 
     lastTradeTime: {
       BTC:
@@ -1449,6 +1253,7 @@ function runPaperSelfTest() {
     Math.max(
       CONFIG.minNetProfitPercent +
       0.20,
+
       0.50
     );
 
@@ -1475,8 +1280,10 @@ function runPaperSelfTest() {
 
     for (
       let i = 0;
+
       i <
       CONFIG.requiredConfirmations;
+
       i++
     ) {
 
@@ -1496,23 +1303,29 @@ function runPaperSelfTest() {
 
       executePaperTrade(
         "BTC",
+
         "Coinbase",
+
         78000,
+
         "OKX",
+
         78500,
+
         testGross,
-        testNet
+
+        testNet,
+
+        false
       );
 
 
       log(
-        "✅ SELF TEST PAPER COMPLETATO: conferme e PAPER TRADE funzionano."
+        "✅ SELF TEST PAPER COMPLETATO."
       );
     }
 
-  } catch (
-    error
-  ) {
+  } catch (error) {
 
     log(
       "❌ SELF TEST PAPER FALLITO: " +
@@ -1524,30 +1337,28 @@ function runPaperSelfTest() {
     paper.capital =
       saved.capital;
 
-
     paper.totalProfit =
       saved.totalProfit;
-
 
     paper.trades =
       saved.trades;
 
-
     paper.winningTrades =
       saved.winningTrades;
 
-
     paper.losingTrades =
       saved.losingTrades;
-
 
     paper.volume =
       saved.volume;
 
 
+    stats.executedOpportunities =
+      saved.executedOpportunities;
+
+
     paper.lastTradeTime.BTC =
       saved.lastTradeTime.BTC;
-
 
     paper.lastTradeTime.ETH =
       saved.lastTradeTime.ETH;
@@ -1555,6 +1366,7 @@ function runPaperSelfTest() {
 
     Object.assign(
       confirmations.BTC,
+
       saved.confirmations
     );
 
@@ -1566,9 +1378,9 @@ function runPaperSelfTest() {
 }
 
 
-// ============================================================
-// ARBITRAGE ENGINE
-// ============================================================
+/* ============================================================
+   ARBITRAGE CHECK
+============================================================ */
 
 function checkArbitrage(
   symbol,
@@ -1617,8 +1429,11 @@ function checkArbitrage(
   const targetGross1 =
     targetGrossForNet(
       CONFIG.coinbaseFeePercent,
+
       CONFIG.coinbaseSlippagePercent,
+
       CONFIG.okxFeePercent,
+
       CONFIG.okxSlippagePercent
     );
 
@@ -1626,13 +1441,13 @@ function checkArbitrage(
   const targetGross2 =
     targetGrossForNet(
       CONFIG.okxFeePercent,
+
       CONFIG.okxSlippagePercent,
+
       CONFIG.coinbaseFeePercent,
+
       CONFIG.coinbaseSlippagePercent
     );
-
-
-  stats.opportunities++;
 
 
   const profitable1 =
@@ -1651,102 +1466,130 @@ function checkArbitrage(
 
     updateConfirmation(
       symbol,
+
       "CB_OKX",
+
       profitable1
     );
 
 
     updateConfirmation(
       symbol,
+
       "OKX_CB",
+
       profitable2
     );
-  }
 
 
-  // ----------------------------------------------------------
-  // PRIMO ALERT TELEGRAM
-  // ----------------------------------------------------------
-
-  if (
-    allowConfirmation &&
-    profitable1
-  ) {
-
-    notifyProfitableOpportunity(
-      symbol,
-      "CB_OKX",
-      "Coinbase",
-      cb.ask,
-      "OKX",
-      okx.bid,
-      result1.gross,
-      result1.net,
-      confirmations[symbol].cbToOkx
-    );
-  }
+    const confirmed1 =
+      profitable1 &&
+      confirmations[symbol].cbToOkx >=
+      CONFIG.requiredConfirmations;
 
 
-  if (
-    allowConfirmation &&
-    profitable2
-  ) {
-
-    notifyProfitableOpportunity(
-      symbol,
-      "OKX_CB",
-      "OKX",
-      okx.ask,
-      "Coinbase",
-      cb.bid,
-      result2.gross,
-      result2.net,
-      confirmations[symbol].okxToCb
-    );
-  }
+    const confirmed2 =
+      profitable2 &&
+      confirmations[symbol].okxToCb >=
+      CONFIG.requiredConfirmations;
 
 
-  // ----------------------------------------------------------
-  // SEGNALE TELEGRAM DOPO 3 CONFERME
-  // ----------------------------------------------------------
+    if (
+      confirmed1
+    ) {
 
-  if (
-    allowConfirmation &&
-    profitable1 &&
-    confirmations[symbol].cbToOkx >=
-    CONFIG.requiredConfirmations
-  ) {
-
-    notifyConfirmedOpportunity(
-      symbol,
-      "CB_OKX",
-      "Coinbase",
-      cb.ask,
-      "OKX",
-      okx.bid,
-      result1.gross,
-      result1.net
-    );
-  }
+      stats.confirmedOpportunities++;
 
 
-  if (
-    allowConfirmation &&
-    profitable2 &&
-    confirmations[symbol].okxToCb >=
-    CONFIG.requiredConfirmations
-  ) {
+      notifyProfitableOpportunity(
+        symbol,
 
-    notifyConfirmedOpportunity(
-      symbol,
-      "OKX_CB",
-      "OKX",
-      okx.ask,
-      "Coinbase",
-      cb.bid,
-      result2.gross,
-      result2.net
-    );
+        "CB_OKX",
+
+        result1,
+
+        confirmations[symbol].cbToOkx
+      );
+
+
+      const executed =
+        executePaperTrade(
+          symbol,
+
+          "Coinbase",
+
+          cb.ask,
+
+          "OKX",
+
+          okx.bid,
+
+          result1.gross,
+
+          result1.net
+        );
+
+
+      if (
+        executed
+      ) {
+
+        confirmations[symbol].cbToOkx =
+          0;
+
+        confirmations[symbol].lastCbToOkx =
+          0;
+      }
+    }
+
+
+    if (
+      confirmed2
+    ) {
+
+      stats.confirmedOpportunities++;
+
+
+      notifyProfitableOpportunity(
+        symbol,
+
+        "OKX_CB",
+
+        result2,
+
+        confirmations[symbol].okxToCb
+      );
+
+
+      const executed =
+        executePaperTrade(
+          symbol,
+
+          "OKX",
+
+          okx.ask,
+
+          "Coinbase",
+
+          cb.bid,
+
+          result2.gross,
+
+          result2.net
+        );
+
+
+      if (
+        executed
+      ) {
+
+        confirmations[symbol].okxToCb =
+          0;
+
+        confirmations[symbol].lastOkxToCb =
+          0;
+      }
+    }
   }
 
 
@@ -1766,96 +1609,32 @@ function checkArbitrage(
 
     displayStatus(
       symbol,
+
       cb,
+
       okx,
+
       result1,
+
       result2,
+
       targetGross1,
+
       targetGross2
     );
-  }
-
-
-  // ----------------------------------------------------------
-  // PAPER TRADE CB -> OKX
-  // ----------------------------------------------------------
-
-  if (
-    allowConfirmation &&
-    profitable1 &&
-    confirmations[symbol].cbToOkx >=
-    CONFIG.requiredConfirmations
-  ) {
-
-    stats.profitableOpportunities++;
-
-
-    executePaperTrade(
-      symbol,
-      "Coinbase",
-      cb.ask,
-      "OKX",
-      okx.bid,
-      result1.gross,
-      result1.net
-    );
-
-
-    confirmations[symbol].cbToOkx =
-      0;
-
-
-    confirmations[symbol].lastCbToOkx =
-      0;
-  }
-
-
-  // ----------------------------------------------------------
-  // PAPER TRADE OKX -> CB
-  // ----------------------------------------------------------
-
-  if (
-    allowConfirmation &&
-    profitable2 &&
-    confirmations[symbol].okxToCb >=
-    CONFIG.requiredConfirmations
-  ) {
-
-    stats.profitableOpportunities++;
-
-
-    executePaperTrade(
-      symbol,
-      "OKX",
-      okx.ask,
-      "Coinbase",
-      cb.bid,
-      result2.gross,
-      result2.net
-    );
-
-
-    confirmations[symbol].okxToCb =
-      0;
-
-
-    confirmations[symbol].lastOkxToCb =
-      0;
   }
 }
 
 
-// ============================================================
-// COINBASE UPDATE
-// ============================================================
+/* ============================================================
+   COINBASE UPDATE
+============================================================ */
 
 function updateCoinbase(data) {
 
   if (
     !data ||
-    !Array.isArray(
-      data.events
-    )
+    !Array.isArray(data.events)
   ) {
     return;
   }
@@ -1867,9 +1646,7 @@ function updateCoinbase(data) {
 
     if (
       !event ||
-      !Array.isArray(
-        event.tickers
-      )
+      !Array.isArray(event.tickers)
     ) {
       continue;
     }
@@ -1954,6 +1731,7 @@ function updateCoinbase(data) {
 
         checkArbitrage(
           symbol,
+
           true
         );
       }
@@ -1962,9 +1740,9 @@ function updateCoinbase(data) {
 }
 
 
-// ============================================================
-// COINBASE CONNECTION
-// ============================================================
+/* ============================================================
+   CONNECT COINBASE
+============================================================ */
 
 function connectCoinbase() {
 
@@ -1993,6 +1771,7 @@ function connectCoinbase() {
 
   ws.on(
     "open",
+
     () => {
 
       log(
@@ -2002,27 +1781,24 @@ function connectCoinbase() {
 
       ws.send(
         JSON.stringify({
-          type:
-            "subscribe",
+          type: "subscribe",
 
           product_ids: [
             CONFIG.pairs.BTC.coinbase,
+
             CONFIG.pairs.ETH.coinbase
           ],
 
-          channel:
-            "ticker"
+          channel: "ticker"
         })
       );
 
 
       ws.send(
         JSON.stringify({
-          type:
-            "subscribe",
+          type: "subscribe",
 
-          channel:
-            "heartbeats"
+          channel: "heartbeats"
         })
       );
 
@@ -2036,6 +1812,7 @@ function connectCoinbase() {
 
   ws.on(
     "message",
+
     raw => {
 
       try {
@@ -2053,9 +1830,7 @@ function connectCoinbase() {
           )
         );
 
-      } catch (
-        error
-      ) {
+      } catch (error) {
 
         log(
           "❌ Errore Coinbase: " +
@@ -2068,6 +1843,7 @@ function connectCoinbase() {
 
   ws.on(
     "close",
+
     () => {
 
       if (
@@ -2101,21 +1877,16 @@ function connectCoinbase() {
       );
 
 
-      log(
-        "🔄 Riconnessione Coinbase..."
-      );
-
-
       setTimeout(
         () => {
 
           connectionState.coinbase.reconnecting =
             false;
 
-
           connectCoinbase();
 
         },
+
         CONFIG.reconnectDelay
       );
     }
@@ -2124,6 +1895,7 @@ function connectCoinbase() {
 
   ws.on(
     "error",
+
     error => {
 
       log(
@@ -2135,9 +1907,9 @@ function connectCoinbase() {
 }
 
 
-// ============================================================
-// OKX UPDATE
-// ============================================================
+/* ============================================================
+   OKX UPDATE
+============================================================ */
 
 function updateOKX(data) {
 
@@ -2201,7 +1973,6 @@ function updateOKX(data) {
         .bid =
         bid;
 
-
       changed =
         true;
     }
@@ -2228,7 +1999,6 @@ function updateOKX(data) {
         .ask =
         ask;
 
-
       changed =
         true;
     }
@@ -2250,15 +2020,16 @@ function updateOKX(data) {
 
     checkArbitrage(
       symbol,
+
       true
     );
   }
 }
 
 
-// ============================================================
-// OKX CONNECTION
-// ============================================================
+/* ============================================================
+   CONNECT OKX
+============================================================ */
 
 function connectOKX() {
 
@@ -2291,6 +2062,7 @@ function connectOKX() {
 
   ws.on(
     "open",
+
     () => {
 
       log(
@@ -2300,21 +2072,19 @@ function connectOKX() {
 
       ws.send(
         JSON.stringify({
-          op:
-            "subscribe",
+          op: "subscribe",
 
           args: [
+
             {
-              channel:
-                "bbo-tbt",
+              channel: "bbo-tbt",
 
               instId:
                 CONFIG.pairs.BTC.okx
             },
 
             {
-              channel:
-                "bbo-tbt",
+              channel: "bbo-tbt",
 
               instId:
                 CONFIG.pairs.ETH.okx
@@ -2344,6 +2114,7 @@ function connectOKX() {
             }
 
           },
+
           CONFIG.okxPingInterval
         );
     }
@@ -2352,6 +2123,7 @@ function connectOKX() {
 
   ws.on(
     "message",
+
     raw => {
 
       try {
@@ -2381,7 +2153,6 @@ function connectOKX() {
               "pong"
             );
           }
-
 
           return;
         }
@@ -2426,9 +2197,7 @@ function connectOKX() {
           data
         );
 
-      } catch (
-        error
-      ) {
+      } catch (error) {
 
         log(
           "❌ Errore OKX: " +
@@ -2441,6 +2210,7 @@ function connectOKX() {
 
   ws.on(
     "close",
+
     () => {
 
       if (
@@ -2484,21 +2254,16 @@ function connectOKX() {
       );
 
 
-      log(
-        "🔄 Riconnessione OKX..."
-      );
-
-
       setTimeout(
         () => {
 
           connectionState.okx.reconnecting =
             false;
 
-
           connectOKX();
 
         },
+
         CONFIG.reconnectDelay
       );
     }
@@ -2507,6 +2272,7 @@ function connectOKX() {
 
   ws.on(
     "error",
+
     error => {
 
       log(
@@ -2518,9 +2284,9 @@ function connectOKX() {
 }
 
 
-// ============================================================
-// PORTFOLIO REPORT
-// ============================================================
+/* ============================================================
+   PORTFOLIO REPORT
+============================================================ */
 
 function printPortfolio() {
 
@@ -2534,21 +2300,17 @@ function printPortfolio() {
 
   console.log("");
 
-
   console.log(
     "============================================================"
   );
-
 
   console.log(
     "💰 PAPER TRADING REPORT"
   );
 
-
   console.log(
     "============================================================"
   );
-
 
   console.log(
     `Capitale iniziale: ${money(
@@ -2556,13 +2318,11 @@ function printPortfolio() {
     )}`
   );
 
-
   console.log(
     `Capitale attuale:  ${money(
       paper.capital
     )}`
   );
-
 
   console.log(
     `Profitto totale:   ${money(
@@ -2570,26 +2330,21 @@ function printPortfolio() {
     )}`
   );
 
-
   console.log(
     `ROI:               ${pct(roi)}`
   );
-
 
   console.log(
     `Operazioni:        ${paper.trades}`
   );
 
-
   console.log(
     `Vincenti:          ${paper.winningTrades}`
   );
 
-
   console.log(
     `Perdenti:          ${paper.losingTrades}`
   );
-
 
   console.log(
     `Volume PAPER:      ${money(
@@ -2597,26 +2352,23 @@ function printPortfolio() {
     )}`
   );
 
-
   console.log(
     `Controlli mercato: ${stats.checks}`
   );
 
-
   console.log(
-    `Opportunità viste: ${stats.opportunities}`
-  );
-
-
-  console.log(
-    `Opportunità profittevoli: ${
-      stats.profitableOpportunities
+    `Opportunità confermate: ${
+      stats.confirmedOpportunities
     }`
   );
 
+  console.log(
+    `Opportunità eseguite: ${
+      stats.executedOpportunities
+    }`
+  );
 
   console.log("");
-
 
   console.log(
     `Coinbase messaggi: ${
@@ -2624,13 +2376,11 @@ function printPortfolio() {
     }`
   );
 
-
   console.log(
     `Coinbase update:   ${
       stats.coinbaseUpdates
     }`
   );
-
 
   console.log(
     `OKX messaggi:      ${
@@ -2638,16 +2388,13 @@ function printPortfolio() {
     }`
   );
 
-
   console.log(
     `OKX update:        ${
       stats.okxUpdates
     }`
   );
 
-
   console.log("");
-
 
   console.log(
     `Soglia netto: ${
@@ -2655,13 +2402,11 @@ function printPortfolio() {
     }%`
   );
 
-
   console.log(
     `Conferme richieste: ${
       CONFIG.requiredConfirmations
     }`
   );
-
 
   console.log(
     `Trade: ${
@@ -2669,13 +2414,11 @@ function printPortfolio() {
     }% del capitale`
   );
 
-
   console.log(
     `Commissione Coinbase: ${
       CONFIG.coinbaseFeePercent
     }%`
   );
-
 
   console.log(
     `Commissione OKX: ${
@@ -2683,13 +2426,11 @@ function printPortfolio() {
     }%`
   );
 
-
   console.log(
     `Slippage Coinbase: ${
       CONFIG.coinbaseSlippagePercent
     }%`
   );
-
 
   console.log(
     `Slippage OKX: ${
@@ -2697,16 +2438,11 @@ function printPortfolio() {
     }%`
   );
 
-
   console.log(
     `Scanner continuo: ogni ${
       CONFIG.marketScanInterval
     } ms`
   );
-
-
-  console.log("");
-
 
   console.log(
     `Break-even CB -> OKX: ${
@@ -2715,7 +2451,6 @@ function printPortfolio() {
     }%`
   );
 
-
   console.log(
     `Break-even OKX -> CB: ${
       calculateBreakEvenBuyOKXSellCoinbase()
@@ -2723,14 +2458,9 @@ function printPortfolio() {
     }%`
   );
 
-
-  console.log("");
-
-
   console.log(
     "🔒 ORDINI REALI: DISABILITATI"
   );
-
 
   console.log(
     "============================================================"
@@ -2738,17 +2468,16 @@ function printPortfolio() {
 }
 
 
-// ============================================================
-// AVVIO
-// ============================================================
+/* ============================================================
+   START
+============================================================ */
 
 log(
   "============================================================"
 );
 
-
 log(
-  "🚀 CRYPTO ARBITRAGE PAPER ENGINE v11"
+  "🚀 CRYPTO ARBITRAGE PAPER ENGINE v12"
 );
 
 
@@ -2757,11 +2486,11 @@ notifyTelegram(
 
   `Modalità: PAPER TRADING\n` +
 
-  `Capitale iniziale: ${money(
-    CONFIG.initialCapital
-  )}\n` +
+  `Capitale iniziale: ${money(CONFIG.initialCapital)}\n` +
 
   `Coppie: BTC / ETH\n` +
+
+  `Conferme richieste: ${CONFIG.requiredConfirmations}\n` +
 
   `🔒 Ordini reali: DISABILITATI`
 );
@@ -2771,11 +2500,9 @@ log(
   "============================================================"
 );
 
-
 log(
   "Modalità: PAPER TRADING"
 );
-
 
 log(
   `Capitale iniziale: ${
@@ -2783,13 +2510,11 @@ log(
   }`
 );
 
-
 log(
   `Trade: ${
     CONFIG.tradePercentOfCapital
   }%`
 );
-
 
 log(
   `Profitto netto minimo: ${
@@ -2797,13 +2522,11 @@ log(
   }%`
 );
 
-
 log(
   `Conferme richieste: ${
     CONFIG.requiredConfirmations
   }`
 );
-
 
 log(
   `Intervallo conferme: ${
@@ -2811,13 +2534,11 @@ log(
   } ms`
 );
 
-
 log(
   `Commissione Coinbase: ${
     CONFIG.coinbaseFeePercent
   }%`
 );
-
 
 log(
   `Commissione OKX: ${
@@ -2825,20 +2546,17 @@ log(
   }%`
 );
 
-
 log(
   `Slippage Coinbase: ${
     CONFIG.coinbaseSlippagePercent
   }%`
 );
 
-
 log(
   `Slippage OKX: ${
     CONFIG.okxSlippagePercent
   }%`
 );
-
 
 log(
   `Break-even CB -> OKX: ${
@@ -2847,7 +2565,6 @@ log(
   }%`
 );
 
-
 log(
   `Break-even OKX -> CB: ${
     calculateBreakEvenBuyOKXSellCoinbase()
@@ -2855,13 +2572,11 @@ log(
   }%`
 );
 
-
 log(
   `Scanner continuo: ogni ${
     CONFIG.marketScanInterval
   } ms`
 );
-
 
 log(
   `Watchdog dati mercato: ogni ${
@@ -2871,72 +2586,58 @@ log(
   } ms`
 );
 
-
 log(
   "🔒 ORDINI REALI: DISABILITATI"
 );
-
 
 log(
   "============================================================"
 );
 
 
-// ============================================================
-// CONNECTIONS
-// ============================================================
-
 connectCoinbase();
 
 connectOKX();
 
 
-// ============================================================
-// AUTOMATIC PORTFOLIO REPORT
-// ============================================================
-
 setInterval(
   printPortfolio,
+
   CONFIG.statusInterval
 );
 
 
-// ============================================================
-// SELF TEST
-// ============================================================
-
 setTimeout(
   runPaperSelfTest,
+
   3000
 );
 
-
-// ============================================================
-// CONTINUOUS MARKET SCANNER
-// ============================================================
 
 setInterval(
   () => {
 
     checkArbitrage(
       "BTC",
+
       true
     );
 
-
     checkArbitrage(
       "ETH",
+
       true
     );
 
   },
+
   CONFIG.marketScanInterval
 );
 
 
-// ============================================================
-// MARKET DATA WATCHDOG
-// ============================================================
+/* ============================================================
+   MARKET DATA WATCHDOG
+============================================================ */
 
 setInterval(
   () => {
@@ -2964,9 +2665,7 @@ setInterval(
 
         connectionState.coinbase.ws.close();
 
-      } catch (
-        error
-      ) {
+      } catch (error) {
 
         log(
           "⚠️ Errore chiusura Coinbase watchdog: " +
@@ -2995,9 +2694,7 @@ setInterval(
 
         connectionState.okx.ws.close();
 
-      } catch (
-        error
-      ) {
+      } catch (error) {
 
         log(
           "⚠️ Errore chiusura OKX watchdog: " +
@@ -3007,13 +2704,14 @@ setInterval(
     }
 
   },
+
   CONFIG.marketDataWatchdogInterval
 );
 
 
-// ============================================================
-// LIVE ENGINE HEARTBEAT
-// ============================================================
+/* ============================================================
+   LIVE STATUS
+============================================================ */
 
 setInterval(
   () => {
@@ -3071,22 +2769,24 @@ setInterval(
 
       `Checks: ${stats.checks} | ` +
 
-      `Updates: CB ${stats.coinbaseUpdates} / OKX ${stats.okxUpdates} | ` +
+      `Trades: ${paper.trades} | ` +
 
-      `Trades: ${paper.trades}`
+      `Profitto: ${money(paper.totalProfit)}`
     );
 
   },
+
   10000
 );
 
 
-// ============================================================
-// PROCESS PROTECTION
-// ============================================================
+/* ============================================================
+   ERROR HANDLERS
+============================================================ */
 
 process.on(
   "uncaughtException",
+
   error => {
 
     log(
@@ -3099,6 +2799,7 @@ process.on(
 
 process.on(
   "unhandledRejection",
+
   error => {
 
     log(
